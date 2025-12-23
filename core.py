@@ -6,21 +6,23 @@ import hashlib
 import logging
 import sqlite3
 import imagehash
-from threading import Lock
-from collections import defaultdict
+import shutil
+import traceback
+from threading import RLock
 from datetime import datetime
 
 # Image Processing
 import cv2
 import numpy as np
 from PIL import Image, ImageOps, ImageFile
-from PIL.ExifTags import TAGS
 
 # PyQt Core
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QRunnable
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QRunnable, QBuffer, QIODevice
 from PyQt6.QtGui import QImage, QImageReader, QColor, QPixmap
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+logger = logging.getLogger(__name__)
 
 
 def setup_logging():
@@ -32,16 +34,15 @@ def setup_logging():
     logging.getLogger("PIL").setLevel(logging.WARNING)
 
 
-logger = logging.getLogger(__name__)
-
-
 def create_error_pixmap(size):
     img = QImage(size, size, QImage.Format.Format_RGB32)
-    img.fill(QColor("#444444"))
+    img.fill(QColor("#222222"))
     return QPixmap.fromImage(img)
 
 
+# ★修正: ギャラリーと同じ QImageReader を使用するロジックに変更
 def get_db_thumbnail(db_manager, file_id, file_path, size_wh=120):
+    # 1. DBにあればそれを返す
     blob = db_manager.get_thumbnail(file_id)
     if blob:
         pix = QPixmap()
@@ -50,21 +51,37 @@ def get_db_thumbnail(db_manager, file_id, file_path, size_wh=120):
                 pix = pix.scaled(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio,
                                  Qt.TransformationMode.SmoothTransformation)
             return pix
+
+    # 2. DBになければ生成する (QImageReader使用)
     try:
-        if not os.path.exists(file_path): return create_error_pixmap(size_wh)
-        with Image.open(file_path) as img:
-            if img.mode not in ('RGB', 'RGBA'): img = img.convert('RGB')
-            img = ImageOps.exif_transpose(img)
-            img.thumbnail((200, 200), Image.Resampling.LANCZOS)
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=70)
-            blob_data = buffer.getvalue()
+        if not os.path.exists(file_path):
+            return create_error_pixmap(size_wh)
+
+        reader = QImageReader(file_path)
+        reader.setAutoTransform(True)
+
+        # メモリ保護: 読み込み時にサイズを制限
+        if reader.supportsOption(QImageReader.ImageReaderOption.ScaledSize):
+            new_size = reader.size()
+            if new_size.isValid():
+                new_size.scale(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio)
+                reader.setScaledSize(new_size)
+
+        img = reader.read()
+
+        if not img.isNull():
+            # DB保存用にバイト列化 (PyQt6 QBuffer使用)
+            buffer = QBuffer()
+            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+            img.save(buffer, "JPG", quality=70)
+            blob_data = buffer.data().data()
+
             db_manager.save_thumbnail(file_id, blob_data)
-            pix = QPixmap()
-            pix.loadFromData(blob_data)
-            return pix.scaled(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio,
-                              Qt.TransformationMode.SmoothTransformation)
-    except:
+            return QPixmap.fromImage(img)
+
+        return create_error_pixmap(size_wh)
+
+    except Exception:
         return create_error_pixmap(size_wh)
 
 
@@ -78,18 +95,9 @@ def format_eta(seconds):
 
 def get_capture_time(path):
     try:
-        ext = os.path.splitext(path)[1].lower()
-        if ext in {'.jpg', '.jpeg', '.heic', '.tiff'}:
-            with Image.open(path) as img:
-                exif = img.getexif()
-                if exif:
-                    date_str = exif.get(36867)
-                    if date_str:
-                        dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
-                        return dt.timestamp()
+        return os.path.getmtime(path)
     except:
-        pass
-    return os.path.getmtime(path)
+        return 0
 
 
 def hamming_dist(h1: int, h2: int) -> int:
@@ -100,7 +108,7 @@ def hamming_dist(h1: int, h2: int) -> int:
 class DatabaseManager:
     def __init__(self, db_path="photos.db"):
         self.db_path = db_path
-        self.lock = Lock()
+        self.lock = RLock()
         self.conn = None
         self._connect()
         self.init_db()
@@ -118,6 +126,9 @@ class DatabaseManager:
                 hash_value TEXT, p_hash TEXT, blur_score REAL)''')
             c.execute('''CREATE TABLE IF NOT EXISTS thumbnails (
                 file_id INTEGER PRIMARY KEY, data BLOB, FOREIGN KEY(file_id) REFERENCES files(id))''')
+            c.execute('''CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY, value TEXT)''')
+
             c.execute('CREATE INDEX IF NOT EXISTS idx_path ON files (path)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_status ON files (status)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_hash ON files (hash_value)')
@@ -126,10 +137,41 @@ class DatabaseManager:
 
     def rebuild_db(self):
         with self.lock:
-            self.conn.cursor().execute("DROP TABLE IF EXISTS thumbnails")
-            self.conn.cursor().execute("DROP TABLE IF EXISTS files")
+            try:
+                if self.conn: self.conn.close()
+                if os.path.exists(self.db_path):
+                    try:
+                        os.remove(self.db_path)
+                    except:
+                        pass
+                for ext in ["-wal", "-shm"]:
+                    p = self.db_path + ext
+                    if os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except:
+                            pass
+                self._connect()
+                self.init_db()
+            except Exception as e:
+                print(f"DB Rebuild Error: {e}", flush=True)
+                try:
+                    self._connect()
+                except:
+                    pass
+
+    def set_setting(self, key, value):
+        with self.lock:
+            self.conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
             self.conn.commit()
-            self.init_db()
+
+    def get_setting(self, key):
+        with self.lock:
+            try:
+                row = self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+                return row[0] if row else None
+            except:
+                return None
 
     def save_thumbnail(self, fid, data):
         with self.lock:
@@ -153,6 +195,28 @@ class DatabaseManager:
                 return c.rowcount > 0
         except:
             return False
+
+    def remove_files(self, paths):
+        if not paths: return
+        with self.lock:
+            try:
+                c = self.conn.cursor()
+                CHUNK_SIZE = 900
+                paths_list = list(paths)
+                for i in range(0, len(paths_list), CHUNK_SIZE):
+                    chunk = paths_list[i:i + CHUNK_SIZE]
+                    placeholders = ','.join('?' for _ in chunk)
+                    c.execute(
+                        f"DELETE FROM thumbnails WHERE file_id IN (SELECT id FROM files WHERE path IN ({placeholders}))",
+                        chunk)
+                    c.execute(f"DELETE FROM files WHERE path IN ({placeholders})", chunk)
+                self.conn.commit()
+            except Exception as e:
+                print(f"Remove files error: {e}")
+
+    def get_file_count(self):
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
 
     def get_unprocessed_count(self):
         with self.lock: return self.conn.execute("SELECT COUNT(*) FROM files WHERE status = 'unprocessed'").fetchone()[
@@ -195,31 +259,6 @@ class DatabaseManager:
         with self.lock: return self.conn.execute("SELECT id, path, p_hash FROM files WHERE status = 'analyzed' LIMIT ?",
                                                  (limit,)).fetchall()
 
-    def get_sorted_files(self, limit=100, offset=0):
-        with self.lock:
-            return self.conn.execute(
-                "SELECT id, path, mtime FROM files WHERE status = 'analyzed' ORDER BY mtime ASC LIMIT ? OFFSET ?",
-                (limit, offset)).fetchall()
-
-    def find_suggested_folders(self, target_phash_str, max_dist=12):
-        if not target_phash_str: return []
-        try:
-            target_int = int(target_phash_str, 16)
-        except:
-            return []
-        suggestions = defaultdict(int)
-        with self.lock:
-            rows = self.conn.execute(
-                "SELECT path, p_hash FROM files WHERE p_hash IS NOT NULL AND status != 'trash'").fetchall()
-        for path, phash in rows:
-            try:
-                dist = hamming_dist(target_int, int(phash, 16))
-                if dist <= max_dist:
-                    suggestions[os.path.dirname(path)] += (15 - dist)
-            except:
-                pass
-        return [f[0] for f in sorted(suggestions.items(), key=lambda x: x[1], reverse=True)[:5]]
-
     def move_file_to_folder(self, fid, src, folder):
         try:
             name = os.path.basename(src)
@@ -228,19 +267,34 @@ class DatabaseManager:
             if os.path.exists(dest):
                 base, ext = os.path.splitext(name)
                 dest = os.path.join(folder, f"{base}_{int(time.time())}{ext}")
-            os.rename(src, dest)
+            shutil.move(src, dest)
             with self.lock:
                 self.conn.execute("UPDATE files SET path = ?, status = 'sorted' WHERE id = ?", (dest, fid))
                 self.conn.commit()
             return True
-        except:
+        except Exception as e:
+            print(f"Move Error: {e}", flush=True)
             return False
 
     def move_to_trash(self, fid):
         with self.lock:
-            self.conn.execute("UPDATE files SET status = 'trash' WHERE id = ?", (fid,))
-            self.conn.commit()
-            return True
+            row = self.conn.execute("SELECT path FROM files WHERE id = ?", (fid,)).fetchone()
+            path = row[0] if row else None
+            success = False
+            if path:
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                        success = True
+                    except:
+                        pass
+                else:
+                    success = True
+            if success:
+                self.conn.execute("UPDATE files SET status = 'trash' WHERE id = ?", (fid,))
+                self.conn.commit()
+                return True
+            return False
 
     def close(self):
         if self.conn: self.conn.close()
@@ -253,31 +307,53 @@ class ScannerThread(QThread):
     finished = pyqtSignal()
 
     def __init__(self, root, db):
-        super().__init__(); self.root = root; self.db = db; self.run_flag = True
+        super().__init__()
+        self.root = root
+        self.db = db
+        self.run_flag = True
 
     def run(self):
         start = time.time()
-        self.status.emit("フォルダ走査中...")
-        real = set()
+        self.status.emit(f"フォルダ走査中: {self.root}")
+
+        disk_files = set()
         for r, _, fs in os.walk(self.root):
             if not self.run_flag: break
             for f in fs:
-                if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png', '.heic', '.mp4', '.mov'}:
-                    real.add(os.path.normpath(os.path.join(r, f)))
-            if len(real) % 1000 == 0: self.status.emit(f"発見: {len(real)}")
+                if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png', '.heic', '.mp4', '.mov', '.webp'}:
+                    disk_files.add(os.path.normpath(os.path.join(r, f)))
+            if len(disk_files) % 1000 == 0:
+                self.status.emit(f"発見: {len(disk_files)}...")
+
+        if not self.run_flag:
+            self.finished.emit()
+            return
 
         db_files = set(os.path.normpath(p) for p in self.db.get_all_files())
-        new_files = list(real - db_files)
+        new_files = list(disk_files - db_files)
+        missing_candidates = db_files - disk_files
+        missing_files = [p for p in missing_candidates if p.startswith(os.path.normpath(self.root))]
+
+        if missing_files:
+            self.status.emit(f"削除同期: {len(missing_files)} 件の古い情報を削除中...")
+            self.db.remove_files(missing_files)
+
         total = len(new_files)
-        if total == 0: self.finished.emit(); return
+        if total == 0:
+            self.status.emit("最新の状態です")
+            self.db.set_setting("root_path", self.root)
+            self.finished.emit()
+            return
 
         self.status.emit(f"新規 {total} 件を登録中...")
         t_start = time.time()
+
         for i, p in enumerate(new_files):
             if not self.run_flag: break
             try:
                 st = os.stat(p)
                 self.db.insert_file(p, st.st_size, get_capture_time(p))
+
                 if i % 20 == 0:
                     per = int((i / total) * 100)
                     self.progress.emit(per)
@@ -285,8 +361,10 @@ class ScannerThread(QThread):
                     if elap > 0:
                         rem = (total - i) / (i / elap) if i > 0 else 0
                         self.status.emit(f"登録中: {i}/{total} 残り{format_eta(rem)}")
-            except:
-                pass
+            except Exception as e:
+                print(f"Scanner Skip Error: {e}", flush=True)
+
+        self.db.set_setting("root_path", self.root)
         self.status.emit("完了")
         self.finished.emit()
 
@@ -300,66 +378,102 @@ class AnalyzerThread(QThread):
     finished = pyqtSignal()
 
     def __init__(self, db):
-        super().__init__(); self.db = db; self.run_flag = True
+        super().__init__()
+        self.db = db
+        self.run_flag = True
+
+    def calc_blur(self, p):
+        try:
+            if os.path.getsize(p) > 50 * 1024 * 1024: return 0.0
+
+            img_data = open(p, "rb").read()
+            nparr = np.frombuffer(img_data, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+
+            if img is None: return 0.0
+            return float(cv2.Laplacian(img, cv2.CV_64F).var())
+        except Exception as e:
+            print(f"Blur calc error on {p}: {e}", flush=True)
+            return 0.0
+
+    def calc_phash(self, p):
+        try:
+            if os.path.getsize(p) > 50 * 1024 * 1024: return ""
+
+            img_data = open(p, "rb").read()
+            nparr = np.frombuffer(img_data, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+
+            if img is None: return ""
+
+            img_small = cv2.resize(img, (9, 8), interpolation=cv2.INTER_AREA)
+            diff = img_small[:, 1:] > img_small[:, :-1]
+            decimal_val = 0
+            for i, val in enumerate(diff.flatten()):
+                if val:
+                    decimal_val |= 1 << (63 - i)
+            return f"{decimal_val:016x}"
+        except Exception as e:
+            print(f"Phash calc error on {p}: {e}", flush=True)
+            return ""
+
+    def gen_thumb(self, fid, path):
+        try:
+            get_db_thumbnail(self.db, fid, path)
+        except:
+            pass
 
     def run(self):
         total = self.db.get_unprocessed_count()
-        if total == 0: self.finished.emit(); return
+        if total == 0:
+            self.finished.emit()
+            return
+
         done = 0
         start = time.time()
+
         while self.run_flag:
             files = self.db.get_unprocessed_files(20)
             if not files: break
+
             for fid, path, ext, size in files:
                 if not self.run_flag: break
+
                 if not os.path.exists(path):
-                    self.db.update_analysis_result(fid, None, "", 0, 'missing');
-                    done += 1;
+                    self.db.update_analysis_result(fid, None, "", 0, 'missing')
+                    done += 1
                     continue
+
+                if size > 100 * 1024 * 1024:
+                    self.db.update_analysis_result(fid, None, "", 0, 'skipped')
+                    done += 1
+                    continue
+
                 try:
                     md5 = hashlib.md5(open(path, 'rb').read(8192)).hexdigest()
                     blur, phash = 0.0, ""
-                    if ext in {'.jpg', '.jpeg', '.png', '.heic'}:
+
+                    if ext in {'.jpg', '.jpeg', '.png', '.webp', '.heic'}:
                         blur = self.calc_blur(path)
                         phash = self.calc_phash(path)
                         self.gen_thumb(fid, path)
+
                     self.db.update_analysis_result(fid, md5, phash, blur)
-                except:
+
+                except Exception as e:
+                    print(f"Analyzer Error on {path}: {e}", flush=True)
                     self.db.update_analysis_result(fid, None, "", 0, 'error')
+
                 done += 1
+
                 if done % 5 == 0:
                     elap = time.time() - start
                     rem = (total - done) / (done / elap) if elap > 0 else 0
                     self.status.emit(f"解析中: {done}/{total} 残り{format_eta(rem)}")
                     self.progress.emit(done, total)
-        self.status.emit("完了");
+
+        self.status.emit("完了")
         self.finished.emit()
-
-    def gen_thumb(self, fid, path):
-        try:
-            img = Image.open(path).convert('RGB')
-            img = ImageOps.exif_transpose(img)
-            img.thumbnail((200, 200), Image.Resampling.LANCZOS)
-            b = io.BytesIO();
-            img.save(b, "JPEG");
-            self.db.save_thumbnail(fid, b.getvalue())
-        except:
-            pass
-
-    def calc_blur(self, p):
-        try:
-            b = bytearray(open(p, "rb").read())
-            n = np.asarray(b, dtype=np.uint8)
-            i = cv2.imdecode(n, cv2.IMREAD_GRAYSCALE)
-            return float(cv2.Laplacian(i, cv2.CV_64F).var())
-        except:
-            return 0.0
-
-    def calc_phash(self, p):
-        try:
-            return str(imagehash.dhash(Image.open(p)))
-        except:
-            return ""
 
     def stop(self):
         self.run_flag = False
@@ -367,7 +481,11 @@ class AnalyzerThread(QThread):
 
 class ImageLoader(QRunnable):
     def __init__(self, idx, path, size):
-        super().__init__(); self.idx = idx; self.path = path; self.size = size; self.signals = ImageLoaderSignals()
+        super().__init__();
+        self.idx = idx;
+        self.path = path;
+        self.size = size;
+        self.signals = ImageLoaderSignals()
 
     def run(self):
         try:
