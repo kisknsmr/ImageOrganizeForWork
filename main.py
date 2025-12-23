@@ -1,6 +1,6 @@
 import sys
 import os
-import traceback  # エラー詳細表示用
+import traceback
 
 # --- ★クラッシュ対策 (順序厳守) ---
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -9,7 +9,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 sys.stdout.reconfigure(encoding='utf-8')
 print("--- APP START ---", flush=True)
 
-# プレロード
+# プレロード (PyQtより先にTorchを読む)
 try:
     print("Pre-loading torch library...", flush=True)
     import torch
@@ -32,6 +32,8 @@ from modules.duplicate_ui import DuplicatePage
 from modules.blur_ui import BlurPage
 from modules.similarity_ui import SimilarityPage
 from modules.sorter_ui import SorterPage
+# ★追加: クラスタリング画面
+from modules.clustering_ui import ClusteringPage
 
 print("All Modules Loaded.", flush=True)
 setup_logging()
@@ -88,7 +90,7 @@ class PhotoModel(QAbstractListModel):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PhotoSortX - Debug Edition")
+        self.setWindowTitle("PhotoSortX - AI Edition")
         self.resize(1200, 800)
         self.setStyleSheet("""
             QMainWindow { background-color: #2b2b2b; }
@@ -112,29 +114,42 @@ class MainWindow(QMainWindow):
         side_layout = QVBoxLayout(sidebar)
         side_layout.setContentsMargins(0, 10, 0, 10)
 
+        # --- サイドバーボタン ---
         btn_home = QPushButton("🏠  ホーム / 取込")
         btn_home.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+
         btn_view = QPushButton("🖼  ギャラリー")
         btn_view.clicked.connect(self.show_gallery)
+
         btn_dup = QPushButton("👯  重複整理")
         btn_dup.clicked.connect(self.show_duplicate_page)
+
         btn_blur = QPushButton("🌫  ピンボケ整理")
         btn_blur.clicked.connect(self.show_blur_page)
+
         btn_sim = QPushButton("👥  類似整理")
         btn_sim.clicked.connect(self.show_similarity_page)
 
         btn_sort = QPushButton("📂  スマート整理")
         btn_sort.clicked.connect(self.show_sorter_page)
 
-        for btn in [btn_home, btn_view, btn_dup, btn_blur, btn_sim, btn_sort]:
+        # ★追加: クラスタリングボタン
+        btn_cluster = QPushButton("🧩  自動グルーピング")
+        btn_cluster.clicked.connect(self.show_clustering_page)
+
+        # ボタンを配置
+        buttons = [btn_home, btn_view, btn_dup, btn_blur, btn_sim, btn_sort, btn_cluster]
+        for btn in buttons:
             btn.setStyleSheet("""
                 QPushButton { background-color: transparent; border: none; padding: 15px 20px; text-align: left; font-size: 15px; border-left: 4px solid transparent; }
                 QPushButton:hover { background-color: #333; }
                 QPushButton:pressed { background-color: #007acc; color: white; }
             """)
             side_layout.addWidget(btn)
+
         side_layout.addStretch()
 
+        # --- メインコンテンツ ---
         self.stack = QStackedWidget()
 
         # 0. Home
@@ -199,15 +214,18 @@ class MainWindow(QMainWindow):
         gallery_layout.addWidget(self.gallery_view)
         self.stack.addWidget(gallery_page)
 
+        # 各機能ページ
         self.duplicate_page = DuplicatePage(self.db)
         self.blur_page = BlurPage(self.db)
         self.sim_page = SimilarityPage(self.db)
         self.sorter_page = SorterPage(self.db)
+        self.clustering_page = ClusteringPage()  # ★追加
 
         self.stack.addWidget(self.duplicate_page)
         self.stack.addWidget(self.blur_page)
         self.stack.addWidget(self.sim_page)
         self.stack.addWidget(self.sorter_page)
+        self.stack.addWidget(self.clustering_page)  # ★追加
 
         main_layout.addWidget(sidebar)
         main_layout.addWidget(self.stack)
@@ -262,23 +280,14 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.sim_page)
 
     def show_sorter_page(self):
-        print("Main: User clicked 'Smart Sort'. Step 1", flush=True)
-        try:
-            print("Main: Step 2 - Calling load_images...", flush=True)
-            self.sorter_page.load_images()
-            print("Main: Step 3 - load_images completed", flush=True)
-        except Exception as e:
-            print(f"Main: load_images FAILED: {e}", flush=True)
-            traceback.print_exc()
-            return
+        print("Main: Switching to Sorter Page", flush=True)
+        self.sorter_page.load_images()
+        self.stack.setCurrentWidget(self.sorter_page)
 
-        try:
-            print("Main: Step 4 - Setting current widget...", flush=True)
-            self.stack.setCurrentWidget(self.sorter_page)
-            print("Main: Step 5 - Widget set successfully", flush=True)
-        except Exception as e:
-            print(f"Main: setCurrentWidget FAILED: {e}", flush=True)
-            traceback.print_exc()
+    # ★追加: クラスタリングページ表示
+    def show_clustering_page(self):
+        print("Main: Switching to Clustering Page", flush=True)
+        self.stack.setCurrentWidget(self.clustering_page)
 
     def closeEvent(self, event):
         self.db.close()
