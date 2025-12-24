@@ -224,9 +224,9 @@ class ManualSorterPage(QWidget):
         # Thumbnails
         self.list_source = QListWidget()
         self.list_source.setViewMode(QListWidget.ViewMode.IconMode)
-        self.list_source.setIconSize(QSize(140, 140))
-        self.list_source.setSpacing(6)
         self.list_source.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.list_source.setIconSize(QSize(140, 140))  # サムネイルサイズ
+        self.list_source.setSpacing(6)
         self.list_source.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3e3e42;")
         self.list_source.itemClicked.connect(self.on_item_clicked)
         left_layout.addWidget(self.list_source)
@@ -249,7 +249,7 @@ class ManualSorterPage(QWidget):
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(5, 0, 0, 0)
 
-        # ★ルート変更ボタン追加
+        # ルート変更ボタン
         tree_header_layout = QHBoxLayout()
         tree_header_layout.addWidget(QLabel("移動先フォルダ:"))
         tree_header_layout.addStretch()
@@ -335,6 +335,10 @@ class ManualSorterPage(QWidget):
             self.load_images(self.current_source_folder)
         elif self.all_source_folders:
             self.load_images(self.all_source_folders[0])
+        else:
+            # ファイルがなくなった場合
+            self.list_source.clear()
+            self.breadcrumb.set_path("ファイルなし")
 
     def show_source_folder_menu(self):
         if not self.all_source_folders: return
@@ -467,7 +471,9 @@ class ManualSorterPage(QWidget):
     def on_move_finished(self, success_count, errors):
         self.btn_move.setEnabled(True)
         self.list_source.setEnabled(True)
-        self.load_images(self.current_source_folder)
+        # ★修正: ライブラリ全体（フォルダ一覧）をリフレッシュする
+        self.refresh_source_list()
+
         msg = f"移動完了: {success_count} 件"
         if errors:
             msg += f"\n\n⚠️ エラーまたはスキップ ({len(errors)}件):\n" + "\n".join(errors[:5])

@@ -40,19 +40,22 @@ def create_error_pixmap(size):
     return QPixmap.fromImage(img)
 
 
-# ★修正: ギャラリーと同じ QImageReader を使用するロジックに変更
 def get_db_thumbnail(db_manager, file_id, file_path, size_wh=120):
-    # 1. DBにあればそれを返す
-    blob = db_manager.get_thumbnail(file_id)
-    if blob:
-        pix = QPixmap()
-        if pix.loadFromData(blob):
-            if pix.width() > size_wh or pix.height() > size_wh:
-                pix = pix.scaled(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio,
-                                 Qt.TransformationMode.SmoothTransformation)
-            return pix
+    """
+    サムネイル取得関数
+    """
+    # 1. DBから取得
+    if file_id and file_id > 0:
+        blob = db_manager.get_thumbnail(file_id)
+        if blob:
+            pix = QPixmap()
+            if pix.loadFromData(blob):
+                if pix.width() > size_wh or pix.height() > size_wh:
+                    pix = pix.scaled(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio,
+                                     Qt.TransformationMode.SmoothTransformation)
+                return pix
 
-    # 2. DBになければ生成する (QImageReader使用)
+    # 2. ファイルから生成
     try:
         if not os.path.exists(file_path):
             return create_error_pixmap(size_wh)
@@ -60,28 +63,28 @@ def get_db_thumbnail(db_manager, file_id, file_path, size_wh=120):
         reader = QImageReader(file_path)
         reader.setAutoTransform(True)
 
-        # メモリ保護: 読み込み時にサイズを制限
-        if reader.supportsOption(QImageReader.ImageReaderOption.ScaledSize):
-            new_size = reader.size()
-            if new_size.isValid():
-                new_size.scale(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio)
-                reader.setScaledSize(new_size)
+        orig_size = reader.size()
+        if orig_size.isValid():
+            orig_size.scale(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio)
+            reader.setScaledSize(orig_size)
 
         img = reader.read()
 
         if not img.isNull():
-            # DB保存用にバイト列化 (PyQt6 QBuffer使用)
             buffer = QBuffer()
             buffer.open(QIODevice.OpenModeFlag.WriteOnly)
             img.save(buffer, "JPG", quality=70)
-            blob_data = buffer.data().data()
+            blob_data = bytes(buffer.data())
 
-            db_manager.save_thumbnail(file_id, blob_data)
+            if file_id and file_id > 0:
+                db_manager.save_thumbnail(file_id, blob_data)
+
             return QPixmap.fromImage(img)
 
         return create_error_pixmap(size_wh)
 
-    except Exception:
+    except Exception as e:
+        print(f"Thumb Gen Error ({os.path.basename(file_path)}): {e}", flush=True)
         return create_error_pixmap(size_wh)
 
 
@@ -175,13 +178,19 @@ class DatabaseManager:
 
     def save_thumbnail(self, fid, data):
         with self.lock:
-            self.conn.execute("INSERT OR REPLACE INTO thumbnails (file_id, data) VALUES (?, ?)", (fid, data))
-            self.conn.commit()
+            try:
+                self.conn.execute("INSERT OR REPLACE INTO thumbnails (file_id, data) VALUES (?, ?)", (fid, data))
+                self.conn.commit()
+            except:
+                pass
 
     def get_thumbnail(self, fid):
         with self.lock:
-            row = self.conn.execute("SELECT data FROM thumbnails WHERE file_id = ?", (fid,)).fetchone()
-            return row[0] if row else None
+            try:
+                row = self.conn.execute("SELECT data FROM thumbnails WHERE file_id = ?", (fid,)).fetchone()
+                return row[0] if row else None
+            except:
+                return None
 
     def insert_file(self, path, size, mtime):
         name = os.path.basename(path)
@@ -277,24 +286,60 @@ class DatabaseManager:
             return False
 
     def move_to_trash(self, fid):
+        """
+        ★修正: 物理削除ではなく、スキャンルート直下の '_TrashBox' フォルダへ移動する
+        """
         with self.lock:
+            # 1. ファイル情報を取得
             row = self.conn.execute("SELECT path FROM files WHERE id = ?", (fid,)).fetchone()
-            path = row[0] if row else None
-            success = False
-            if path:
-                if os.path.exists(path):
-                    try:
-                        os.remove(path)
-                        success = True
-                    except:
-                        pass
-                else:
-                    success = True
-            if success:
+            if not row: return False
+            src_path = row[0]
+
+            if not os.path.exists(src_path):
+                # ファイルが既にない場合はDBだけ更新してTrue扱い
                 self.conn.execute("UPDATE files SET status = 'trash' WHERE id = ?", (fid,))
                 self.conn.commit()
                 return True
-            return False
+
+            # 2. ゴミ箱フォルダの決定
+            # 設定からルートパスを取得、なければ現在のファイルの親の親などをたどる
+            root_path = self.get_setting("root_path")
+            if not root_path or not os.path.exists(root_path):
+                # ルートが見つからない場合、アプリ実行場所の下に作る
+                root_path = os.getcwd()
+
+            trash_dir = os.path.join(root_path, "_TrashBox")
+
+            try:
+                os.makedirs(trash_dir, exist_ok=True)
+            except Exception as e:
+                print(f"Trash Dir Create Error: {e}")
+                return False
+
+            # 3. 移動先のパス決定 (同名ファイル回避)
+            fname = os.path.basename(src_path)
+            dest_path = os.path.join(trash_dir, fname)
+
+            if os.path.exists(dest_path):
+                # 同名なら日時をつけてリネーム
+                base, ext = os.path.splitext(fname)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                dest_path = os.path.join(trash_dir, f"{base}_{timestamp}{ext}")
+
+            # 4. 移動実行
+            try:
+                shutil.move(src_path, dest_path)
+                print(f"Moved to Trash: {src_path} -> {dest_path}")
+
+                # DB更新 (パスも更新しておくと後でゴミ箱内として管理可能だが、
+                # ここではステータスを trash にして管理対象外にする)
+                self.conn.execute("UPDATE files SET path = ?, status = 'trash' WHERE id = ?", (dest_path, fid))
+                self.conn.commit()
+                return True
+
+            except Exception as e:
+                print(f"Move to Trash Failed: {e}")
+                return False
 
     def close(self):
         if self.conn: self.conn.close()
@@ -319,6 +364,10 @@ class ScannerThread(QThread):
         disk_files = set()
         for r, _, fs in os.walk(self.root):
             if not self.run_flag: break
+
+            # _TrashBox はスキップ
+            if "_TrashBox" in r: continue
+
             for f in fs:
                 if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png', '.heic', '.mp4', '.mov', '.webp'}:
                     disk_files.add(os.path.normpath(os.path.join(r, f)))
@@ -465,7 +514,6 @@ class AnalyzerThread(QThread):
                     self.db.update_analysis_result(fid, None, "", 0, 'error')
 
                 done += 1
-
                 if done % 5 == 0:
                     elap = time.time() - start
                     rem = (total - done) / (done / elap) if elap > 0 else 0
