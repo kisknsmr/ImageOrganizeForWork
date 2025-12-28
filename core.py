@@ -1,15 +1,15 @@
+"""
+コアモジュール
+データベース管理、画像処理、スレッド処理などの主要機能を提供
+"""
 import sys
 import os
-import io
 import time
 import hashlib
 import logging
-import sqlite3
-import imagehash
-import shutil
 import traceback
-from threading import RLock
-from datetime import datetime
+from typing import Optional, List, Tuple, Set, Any
+from pathlib import Path
 
 # Image Processing
 import cv2
@@ -17,47 +17,93 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFile
 
 # PyQt Core
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QRunnable, QBuffer, QIODevice
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QRunnable, QBuffer, QIODevice, QSize
 from PyQt6.QtGui import QImage, QImageReader, QColor, QPixmap
+
+# 設定
+from config import config
+from database import DatabaseManager
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 logger = logging.getLogger(__name__)
 
 
-def setup_logging():
+def setup_logging() -> None:
+    """
+    ロギング設定を初期化
+    
+    ファイルとコンソールの両方にログを出力します。
+    """
+    log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.DEBUG)
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=log_level,
         format='%(asctime)s [%(levelname)s] (%(threadName)s) - %(message)s',
-        handlers=[logging.FileHandler("debug.log", encoding='utf-8'), logging.StreamHandler(sys.stdout)]
+        handlers=[
+            logging.FileHandler(config.LOG_FILE, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
     )
     logging.getLogger("PIL").setLevel(logging.WARNING)
 
 
-def create_error_pixmap(size):
+def create_error_pixmap(size: int) -> QPixmap:
+    """
+    エラー表示用のプレースホルダー画像を生成
+    
+    Args:
+        size: 画像のサイズ（ピクセル）
+        
+    Returns:
+        エラー表示用のQPixmap
+    """
     img = QImage(size, size, QImage.Format.Format_RGB32)
     img.fill(QColor("#222222"))
     return QPixmap.fromImage(img)
 
 
-def get_db_thumbnail(db_manager, file_id, file_path, size_wh=120):
+def get_db_thumbnail(db_manager: 'DatabaseManager', file_id: int, file_path: str, 
+                     size_wh: int = None) -> QPixmap:
     """
     サムネイル取得関数
+    
+    DBにキャッシュがあればそれを返し、なければファイルから生成してDBに保存します。
+    
+    Args:
+        db_manager: データベースマネージャーインスタンス
+        file_id: ファイルID
+        file_path: ファイルパス
+        size_wh: サムネイルサイズ（デフォルト: config.DEFAULT_THUMBNAIL_SIZE）
+        
+    Returns:
+        サムネイル画像のQPixmap
     """
+    if size_wh is None:
+        size_wh = config.DEFAULT_THUMBNAIL_SIZE
+    
+    # パス検証
+    if not config.validate_path(file_path):
+        logger.warning(f"Invalid path detected: {file_path}")
+        return create_error_pixmap(size_wh)
+    
     # 1. DBから取得
     if file_id and file_id > 0:
-        blob = db_manager.get_thumbnail(file_id)
-        if blob:
-            pix = QPixmap()
-            if pix.loadFromData(blob):
-                if pix.width() > size_wh or pix.height() > size_wh:
-                    pix = pix.scaled(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio,
-                                     Qt.TransformationMode.SmoothTransformation)
-                return pix
+        try:
+            blob = db_manager.get_thumbnail(file_id)
+            if blob:
+                pix = QPixmap()
+                if pix.loadFromData(blob):
+                    if pix.width() > size_wh or pix.height() > size_wh:
+                        pix = pix.scaled(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation)
+                    return pix
+        except Exception as e:
+            logger.error(f"Failed to load thumbnail from DB (id={file_id}): {e}")
 
     # 2. ファイルから生成
     try:
         if not os.path.exists(file_path):
+            logger.warning(f"File not found: {file_path}")
             return create_error_pixmap(size_wh)
 
         reader = QImageReader(file_path)
@@ -73,276 +119,140 @@ def get_db_thumbnail(db_manager, file_id, file_path, size_wh=120):
         if not img.isNull():
             buffer = QBuffer()
             buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-            img.save(buffer, "JPG", quality=70)
+            img.save(buffer, "JPG", quality=config.THUMBNAIL_QUALITY)
             blob_data = bytes(buffer.data())
 
             if file_id and file_id > 0:
-                db_manager.save_thumbnail(file_id, blob_data)
+                try:
+                    db_manager.save_thumbnail(file_id, blob_data)
+                except Exception as e:
+                    logger.error(f"Failed to save thumbnail to DB (id={file_id}): {e}")
 
             return QPixmap.fromImage(img)
 
         return create_error_pixmap(size_wh)
 
+    except (OSError, IOError) as e:
+        logger.error(f"IO error while generating thumbnail ({os.path.basename(file_path)}): {e}")
+        return create_error_pixmap(size_wh)
     except Exception as e:
-        print(f"Thumb Gen Error ({os.path.basename(file_path)}): {e}", flush=True)
+        logger.error(f"Unexpected error while generating thumbnail ({os.path.basename(file_path)}): {e}", 
+                     exc_info=True)
         return create_error_pixmap(size_wh)
 
 
-def format_eta(seconds):
-    if seconds < 0: return "--:--"
+def format_eta(seconds: float) -> str:
+    """
+    残り時間をフォーマット（HH:MM:SS または MM:SS）
+    
+    Args:
+        seconds: 残り秒数
+        
+    Returns:
+        フォーマットされた時間文字列
+    """
+    if seconds < 0:
+        return "--:--"
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
-    if h > 0: return f"{h:02d}:{m:02d}:{s:02d}"
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
 
-def get_capture_time(path):
+def get_capture_time(path: str) -> float:
+    """
+    ファイルの更新日時を取得
+    
+    Args:
+        path: ファイルパス
+        
+    Returns:
+        更新日時（タイムスタンプ）、エラー時は0
+    """
     try:
+        if not config.validate_path(path):
+            logger.warning(f"Invalid path for get_capture_time: {path}")
+            return 0.0
         return os.path.getmtime(path)
-    except:
-        return 0
+    except (OSError, IOError) as e:
+        logger.error(f"Failed to get mtime for {path}: {e}")
+        return 0.0
+    except Exception as e:
+        logger.error(f"Unexpected error getting mtime for {path}: {e}", exc_info=True)
+        return 0.0
 
 
 def hamming_dist(h1: int, h2: int) -> int:
+    """
+    ハミング距離を計算（2つのハッシュ値の違い）
+    
+    Args:
+        h1: 最初のハッシュ値
+        h2: 2番目のハッシュ値
+        
+    Returns:
+        ハミング距離
+    """
     return (h1 ^ h2).bit_count()
 
 
-# --- DB Manager ---
-class DatabaseManager:
-    def __init__(self, db_path="photos.db"):
-        self.db_path = db_path
-        self.lock = RLock()
-        self.conn = None
-        self._connect()
-        self.init_db()
+def format_file_size(size_bytes: int) -> str:
+    """
+    ファイルサイズを人間が読みやすい形式にフォーマット
+    
+    Args:
+        size_bytes: バイト数
+        
+    Returns:
+        フォーマットされたサイズ文字列 (例: "1.5 MB")
+    """
+    if size_bytes < 0:
+        return "不明"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} PB"
 
-    def _connect(self):
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self.conn.execute("PRAGMA journal_mode=WAL")
 
-    def init_db(self):
-        with self.lock:
-            c = self.conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS files (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT UNIQUE, filename TEXT, extension TEXT, 
-                size INTEGER, mtime TIMESTAMP, status TEXT DEFAULT 'unprocessed', 
-                hash_value TEXT, p_hash TEXT, blur_score REAL)''')
-            c.execute('''CREATE TABLE IF NOT EXISTS thumbnails (
-                file_id INTEGER PRIMARY KEY, data BLOB, FOREIGN KEY(file_id) REFERENCES files(id))''')
-            c.execute('''CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY, value TEXT)''')
-
-            c.execute('CREATE INDEX IF NOT EXISTS idx_path ON files (path)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_status ON files (status)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_hash ON files (hash_value)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_mtime ON files (mtime)')
-            self.conn.commit()
-
-    def rebuild_db(self):
-        with self.lock:
-            try:
-                if self.conn: self.conn.close()
-                if os.path.exists(self.db_path):
-                    try:
-                        os.remove(self.db_path)
-                    except:
-                        pass
-                for ext in ["-wal", "-shm"]:
-                    p = self.db_path + ext
-                    if os.path.exists(p):
-                        try:
-                            os.remove(p)
-                        except:
-                            pass
-                self._connect()
-                self.init_db()
-            except Exception as e:
-                print(f"DB Rebuild Error: {e}", flush=True)
-                try:
-                    self._connect()
-                except:
-                    pass
-
-    def set_setting(self, key, value):
-        with self.lock:
-            self.conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
-            self.conn.commit()
-
-    def get_setting(self, key):
-        with self.lock:
-            try:
-                row = self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-                return row[0] if row else None
-            except:
-                return None
-
-    def save_thumbnail(self, fid, data):
-        with self.lock:
-            try:
-                self.conn.execute("INSERT OR REPLACE INTO thumbnails (file_id, data) VALUES (?, ?)", (fid, data))
-                self.conn.commit()
-            except:
-                pass
-
-    def get_thumbnail(self, fid):
-        with self.lock:
-            try:
-                row = self.conn.execute("SELECT data FROM thumbnails WHERE file_id = ?", (fid,)).fetchone()
-                return row[0] if row else None
-            except:
-                return None
-
-    def insert_file(self, path, size, mtime):
-        name = os.path.basename(path)
-        ext = os.path.splitext(name)[1].lower()
+def get_file_info(path: str) -> dict:
+    """
+    ファイルの詳細情報を取得
+    
+    Args:
+        path: ファイルパス
+        
+    Returns:
+        ファイル情報の辞書 (exists, file_size, image_width, image_height)
+    """
+    result = {
+        'exists': False,
+        'file_size': 0,
+        'image_width': None,
+        'image_height': None
+    }
+    
+    try:
+        if not os.path.exists(path):
+            return result
+            
+        result['exists'] = True
+        result['file_size'] = os.path.getsize(path)
+        
+        # 画像サイズを取得
         try:
-            with self.lock:
-                c = self.conn.cursor()
-                c.execute('INSERT OR IGNORE INTO files (path, filename, extension, size, mtime) VALUES (?, ?, ?, ?, ?)',
-                          (path, name, ext, size, mtime))
-                self.conn.commit()
-                return c.rowcount > 0
-        except:
-            return False
-
-    def remove_files(self, paths):
-        if not paths: return
-        with self.lock:
-            try:
-                c = self.conn.cursor()
-                CHUNK_SIZE = 900
-                paths_list = list(paths)
-                for i in range(0, len(paths_list), CHUNK_SIZE):
-                    chunk = paths_list[i:i + CHUNK_SIZE]
-                    placeholders = ','.join('?' for _ in chunk)
-                    c.execute(
-                        f"DELETE FROM thumbnails WHERE file_id IN (SELECT id FROM files WHERE path IN ({placeholders}))",
-                        chunk)
-                    c.execute(f"DELETE FROM files WHERE path IN ({placeholders})", chunk)
-                self.conn.commit()
-            except Exception as e:
-                print(f"Remove files error: {e}")
-
-    def get_file_count(self):
-        with self.lock:
-            return self.conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-
-    def get_unprocessed_count(self):
-        with self.lock: return self.conn.execute("SELECT COUNT(*) FROM files WHERE status = 'unprocessed'").fetchone()[
-            0]
-
-    def get_unprocessed_files(self, limit=1000):
-        with self.lock: return self.conn.execute(
-            "SELECT id, path, extension, size FROM files WHERE status = 'unprocessed' LIMIT ?", (limit,)).fetchall()
-
-    def update_analysis_result(self, fid, md5, phash, blur, status='analyzed'):
-        with self.lock:
-            self.conn.execute('UPDATE files SET hash_value=?, p_hash=?, blur_score=?, status=? WHERE id=?',
-                              (md5, phash, blur, status, fid))
-            self.conn.commit()
-
-    def get_duplicate_hashes(self):
-        with self.lock:
-            return self.conn.execute(
-                'SELECT hash_value, COUNT(*) as cnt FROM files WHERE hash_value IS NOT NULL AND status != "trash" GROUP BY hash_value HAVING cnt > 1 ORDER BY cnt DESC').fetchall()
-
-    def get_files_by_hash(self, val):
-        with self.lock: return self.conn.execute(
-            "SELECT id, path, size, mtime FROM files WHERE hash_value = ? AND status != 'trash'", (val,)).fetchall()
-
-    def get_blurry_files(self, th):
-        with self.lock: return self.conn.execute(
-            'SELECT id, path FROM files WHERE blur_score > 0 AND blur_score < ? AND status != "trash" ORDER BY blur_score ASC LIMIT 200',
-            (th,)).fetchall()
-
-    def get_files_with_phash(self):
-        with self.lock: return self.conn.execute(
-            "SELECT id, path, p_hash, mtime FROM files WHERE p_hash IS NOT NULL AND status != 'trash'").fetchall()
-
-    def get_all_files(self):
-        with self.lock:
-            return [r[0] for r in
-                    self.conn.execute("SELECT path FROM files WHERE status != 'trash' ORDER BY mtime DESC").fetchall()]
-
-    def get_analyzed_files_unsorted(self, limit=100):
-        with self.lock: return self.conn.execute("SELECT id, path, p_hash FROM files WHERE status = 'analyzed' LIMIT ?",
-                                                 (limit,)).fetchall()
-
-    def move_file_to_folder(self, fid, src, folder):
-        try:
-            name = os.path.basename(src)
-            dest = os.path.join(folder, name)
-            if os.path.abspath(os.path.dirname(src)) == os.path.abspath(folder): return True
-            if os.path.exists(dest):
-                base, ext = os.path.splitext(name)
-                dest = os.path.join(folder, f"{base}_{int(time.time())}{ext}")
-            shutil.move(src, dest)
-            with self.lock:
-                self.conn.execute("UPDATE files SET path = ?, status = 'sorted' WHERE id = ?", (dest, fid))
-                self.conn.commit()
-            return True
-        except Exception as e:
-            print(f"Move Error: {e}", flush=True)
-            return False
-
-    def move_to_trash(self, fid):
-        """
-        ★修正: 物理削除ではなく、スキャンルート直下の '_TrashBox' フォルダへ移動する
-        """
-        with self.lock:
-            # 1. ファイル情報を取得
-            row = self.conn.execute("SELECT path FROM files WHERE id = ?", (fid,)).fetchone()
-            if not row: return False
-            src_path = row[0]
-
-            if not os.path.exists(src_path):
-                # ファイルが既にない場合はDBだけ更新してTrue扱い
-                self.conn.execute("UPDATE files SET status = 'trash' WHERE id = ?", (fid,))
-                self.conn.commit()
-                return True
-
-            # 2. ゴミ箱フォルダの決定
-            # 設定からルートパスを取得、なければ現在のファイルの親の親などをたどる
-            root_path = self.get_setting("root_path")
-            if not root_path or not os.path.exists(root_path):
-                # ルートが見つからない場合、アプリ実行場所の下に作る
-                root_path = os.getcwd()
-
-            trash_dir = os.path.join(root_path, "_TrashBox")
-
-            try:
-                os.makedirs(trash_dir, exist_ok=True)
-            except Exception as e:
-                print(f"Trash Dir Create Error: {e}")
-                return False
-
-            # 3. 移動先のパス決定 (同名ファイル回避)
-            fname = os.path.basename(src_path)
-            dest_path = os.path.join(trash_dir, fname)
-
-            if os.path.exists(dest_path):
-                # 同名なら日時をつけてリネーム
-                base, ext = os.path.splitext(fname)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                dest_path = os.path.join(trash_dir, f"{base}_{timestamp}{ext}")
-
-            # 4. 移動実行
-            try:
-                shutil.move(src_path, dest_path)
-                print(f"Moved to Trash: {src_path} -> {dest_path}")
-
-                # DB更新 (パスも更新しておくと後でゴミ箱内として管理可能だが、
-                # ここではステータスを trash にして管理対象外にする)
-                self.conn.execute("UPDATE files SET path = ?, status = 'trash' WHERE id = ?", (dest_path, fid))
-                self.conn.commit()
-                return True
-
-            except Exception as e:
-                print(f"Move to Trash Failed: {e}")
-                return False
-
-    def close(self):
-        if self.conn: self.conn.close()
+            from PIL import Image
+            with Image.open(path) as img:
+                result['image_width'] = img.width
+                result['image_height'] = img.height
+        except Exception:
+            pass  # 画像でない場合は無視
+            
+    except Exception as e:
+        logger.warning(f"Failed to get file info for {path}: {e}")
+        
+    return result
 
 
 # --- Workers ---
@@ -364,13 +274,19 @@ class ScannerThread(QThread):
         disk_files = set()
         for r, _, fs in os.walk(self.root):
             if not self.run_flag: break
-
-            # _TrashBox はスキップ
-            if "_TrashBox" in r: continue
+            
+            # ゴミ箱フォルダはスキップ
+            if config.TRASH_FOLDER_NAME in r:
+                continue
 
             for f in fs:
-                if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png', '.heic', '.mp4', '.mov', '.webp'}:
-                    disk_files.add(os.path.normpath(os.path.join(r, f)))
+                ext = os.path.splitext(f)[1].lower()
+                if ext in config.ALL_EXTENSIONS:
+                    full_path = os.path.normpath(os.path.join(r, f))
+                    if config.validate_path(full_path):
+                        disk_files.add(full_path)
+                    else:
+                        logger.warning(f"Invalid path skipped: {full_path}")
             if len(disk_files) % 1000 == 0:
                 self.status.emit(f"発見: {len(disk_files)}...")
 
@@ -402,8 +318,12 @@ class ScannerThread(QThread):
             try:
                 st = os.stat(p)
                 self.db.insert_file(p, st.st_size, get_capture_time(p))
+                
+                # SSD負荷軽減措置
+                if config.LOW_LOAD_MODE:
+                    time.sleep(config.LOW_LOAD_SLEEP_TIME)
 
-                if i % 20 == 0:
+                if i % config.PROGRESS_UPDATE_INTERVAL_SCAN == 0:
                     per = int((i / total) * 100)
                     self.progress.emit(per)
                     elap = time.time() - t_start
@@ -431,46 +351,100 @@ class AnalyzerThread(QThread):
         self.db = db
         self.run_flag = True
 
-    def calc_blur(self, p):
+    def calc_blur(self, p: str) -> float:
+        """
+        画像のピンボケスコアを計算（Laplacian分散）
+        
+        Args:
+            p: 画像ファイルパス
+            
+        Returns:
+            ピンボケスコア（0.0の場合はエラーまたは大きすぎるファイル）
+        """
+        if not config.validate_path(p):
+            logger.warning(f"Invalid path for blur calculation: {p}")
+            return 0.0
+        
         try:
-            if os.path.getsize(p) > 50 * 1024 * 1024: return 0.0
+            file_size = os.path.getsize(p)
+            if file_size > config.MAX_IMAGE_SIZE_FOR_ANALYSIS:
+                logger.debug(f"File too large for blur calculation: {p} ({file_size} bytes)")
+                return 0.0
 
-            img_data = open(p, "rb").read()
+            with open(p, "rb") as f:
+                img_data = f.read()
+            
             nparr = np.frombuffer(img_data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
 
-            if img is None: return 0.0
+            if img is None:
+                logger.warning(f"Failed to decode image for blur calculation: {p}")
+                return 0.0
+            
             return float(cv2.Laplacian(img, cv2.CV_64F).var())
+        except (OSError, IOError) as e:
+            logger.error(f"IO error calculating blur for {p}: {e}")
+            return 0.0
         except Exception as e:
-            print(f"Blur calc error on {p}: {e}", flush=True)
+            logger.error(f"Unexpected error calculating blur for {p}: {e}", exc_info=True)
             return 0.0
 
-    def calc_phash(self, p):
+    def calc_phash(self, p: str) -> str:
+        """
+        画像のパーセプチュアルハッシュを計算
+        
+        Args:
+            p: 画像ファイルパス
+            
+        Returns:
+            16進数のハッシュ文字列（エラー時は空文字列）
+        """
+        if not config.validate_path(p):
+            logger.warning(f"Invalid path for phash calculation: {p}")
+            return ""
+        
         try:
-            if os.path.getsize(p) > 50 * 1024 * 1024: return ""
+            file_size = os.path.getsize(p)
+            if file_size > config.MAX_IMAGE_SIZE_FOR_ANALYSIS:
+                logger.debug(f"File too large for phash calculation: {p} ({file_size} bytes)")
+                return ""
 
-            img_data = open(p, "rb").read()
+            with open(p, "rb") as f:
+                img_data = f.read()
+            
             nparr = np.frombuffer(img_data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
 
-            if img is None: return ""
+            if img is None:
+                logger.warning(f"Failed to decode image for phash calculation: {p}")
+                return ""
 
-            img_small = cv2.resize(img, (9, 8), interpolation=cv2.INTER_AREA)
+            img_small = cv2.resize(img, config.PHASH_SIZE, interpolation=cv2.INTER_AREA)
             diff = img_small[:, 1:] > img_small[:, :-1]
             decimal_val = 0
             for i, val in enumerate(diff.flatten()):
                 if val:
                     decimal_val |= 1 << (63 - i)
             return f"{decimal_val:016x}"
+        except (OSError, IOError) as e:
+            logger.error(f"IO error calculating phash for {p}: {e}")
+            return ""
         except Exception as e:
-            print(f"Phash calc error on {p}: {e}", flush=True)
+            logger.error(f"Unexpected error calculating phash for {p}: {e}", exc_info=True)
             return ""
 
-    def gen_thumb(self, fid, path):
+    def gen_thumb(self, fid: int, path: str) -> None:
+        """
+        サムネイルを生成してDBに保存
+        
+        Args:
+            fid: ファイルID
+            path: ファイルパス
+        """
         try:
             get_db_thumbnail(self.db, fid, path)
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to generate thumbnail for file_id {fid}, path {path}: {e}")
 
     def run(self):
         total = self.db.get_unprocessed_count()
@@ -482,39 +456,53 @@ class AnalyzerThread(QThread):
         start = time.time()
 
         while self.run_flag:
-            files = self.db.get_unprocessed_files(20)
+            files = self.db.get_unprocessed_files(config.BATCH_SIZE_ANALYZER)
             if not files: break
 
             for fid, path, ext, size in files:
                 if not self.run_flag: break
+                
+                # SSD負荷軽減措置
+                if config.LOW_LOAD_MODE:
+                    time.sleep(config.LOW_LOAD_SLEEP_TIME)
 
                 if not os.path.exists(path):
                     self.db.update_analysis_result(fid, None, "", 0, 'missing')
                     done += 1
                     continue
 
-                if size > 100 * 1024 * 1024:
+                if size > config.MAX_FILE_SIZE_FOR_PROCESSING:
                     self.db.update_analysis_result(fid, None, "", 0, 'skipped')
                     done += 1
                     continue
 
                 try:
-                    md5 = hashlib.md5(open(path, 'rb').read(8192)).hexdigest()
+                    # MD5ハッシュ計算（ファイルの先頭部分のみ）
+                    md5_hash = None
+                    try:
+                        with open(path, 'rb') as f:
+                            md5_hash = hashlib.md5(f.read(config.MD5_READ_SIZE)).hexdigest()
+                    except (OSError, IOError) as e:
+                        logger.warning(f"Failed to read file for MD5: {path}, error: {e}")
+                    
                     blur, phash = 0.0, ""
 
-                    if ext in {'.jpg', '.jpeg', '.png', '.webp', '.heic'}:
+                    if ext in config.IMAGE_EXTENSIONS:
                         blur = self.calc_blur(path)
                         phash = self.calc_phash(path)
                         self.gen_thumb(fid, path)
 
-                    self.db.update_analysis_result(fid, md5, phash, blur)
+                    self.db.update_analysis_result(fid, md5_hash, phash, blur)
 
                 except Exception as e:
-                    print(f"Analyzer Error on {path}: {e}", flush=True)
-                    self.db.update_analysis_result(fid, None, "", 0, 'error')
+                    logger.error(f"Analyzer Error on {path}: {e}", exc_info=True)
+                    try:
+                        self.db.update_analysis_result(fid, None, "", 0, 'error')
+                    except Exception as db_error:
+                        logger.error(f"Failed to update error status in DB: {db_error}")
 
                 done += 1
-                if done % 5 == 0:
+                if done % config.PROGRESS_UPDATE_INTERVAL_ANALYZE == 0:
                     elap = time.time() - start
                     rem = (total - done) / (done / elap) if elap > 0 else 0
                     self.status.emit(f"解析中: {done}/{total} 残り{format_eta(rem)}")
@@ -528,20 +516,52 @@ class AnalyzerThread(QThread):
 
 
 class ImageLoader(QRunnable):
-    def __init__(self, idx, path, size):
-        super().__init__();
-        self.idx = idx;
-        self.path = path;
-        self.size = size;
+    """
+    画像読み込み用のワーカークラス
+    
+    非同期で画像を読み込み、サムネイルを生成します。
+    """
+    
+    def __init__(self, idx: int, path: str, size: QSize):
+        """
+        画像ローダーを初期化
+        
+        Args:
+            idx: 画像のインデックス
+            path: 画像ファイルパス
+            size: サムネイルサイズ
+        """
+        super().__init__()
+        self.idx = idx
+        self.path = path
+        self.size = size
         self.signals = ImageLoaderSignals()
 
-    def run(self):
+    def run(self) -> None:
+        """
+        画像を読み込んでサムネイルを生成
+        """
+        if not config.validate_path(self.path):
+            logger.warning(f"Invalid path for ImageLoader: {self.path}")
+            self.signals.finished.emit(self.idx, create_error_pixmap(self.size.width()))
+            return
+        
         try:
-            r = QImageReader(self.path);
-            r.setScaledSize(r.size().scaled(self.size, Qt.AspectRatioMode.KeepAspectRatio));
-            r.setAutoTransform(True)
-            self.signals.finished.emit(self.idx, r.read())
-        except:
+            reader = QImageReader(self.path)
+            reader.setScaledSize(reader.size().scaled(self.size, Qt.AspectRatioMode.KeepAspectRatio))
+            reader.setAutoTransform(True)
+            img = reader.read()
+            
+            if img.isNull():
+                logger.warning(f"Failed to read image: {self.path}")
+                self.signals.finished.emit(self.idx, create_error_pixmap(self.size.width()))
+            else:
+                self.signals.finished.emit(self.idx, img)
+        except (OSError, IOError) as e:
+            logger.error(f"IO error loading image {self.path}: {e}")
+            self.signals.finished.emit(self.idx, create_error_pixmap(self.size.width()))
+        except Exception as e:
+            logger.error(f"Unexpected error loading image {self.path}: {e}", exc_info=True)
             self.signals.finished.emit(self.idx, create_error_pixmap(self.size.width()))
 
 

@@ -3,12 +3,13 @@ import os
 import logging
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                              QLabel, QPushButton, QListWidgetItem, QScrollArea,
-                             QFrame, QApplication, QGridLayout, QButtonGroup, QSizePolicy)
+                             QFrame, QApplication, QGridLayout, QButtonGroup, QSizePolicy, QSplitter)
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QIcon, QPalette, QColor
+from PyQt6.QtGui import QIcon, QPalette, QColor, QWheelEvent
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import get_db_thumbnail, setup_logging, DatabaseManager
+from core import get_db_thumbnail, setup_logging, DatabaseManager, get_file_info, format_file_size
+from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,8 @@ class DuplicatePage(QWidget):
         self.db = db_manager
         self.view_mode = "grid"
         self.current_group_data = []
+        self.thumbnail_size = config.DEFAULT_GRID_THUMBNAIL_SIZE
+        self.selected_item_data = None  # 選択中のアイテムデータ
         self.init_ui()
 
     def init_ui(self):
@@ -50,10 +53,14 @@ class DuplicatePage(QWidget):
         self.list.itemClicked.connect(self.on_group_selected)
         left_layout.addWidget(self.list)
 
-        # --- 右メインパネル ---
-        right_panel = QWidget()
-        right_panel.setStyleSheet("background-color: #1e1e1e;")
-        right_layout = QVBoxLayout(right_panel)
+        # --- 右メインパネル（スプリッターで分割） ---
+        right_splitter = QSplitter(Qt.Orientation.Horizontal)
+        right_splitter.setStyleSheet("background-color: #1e1e1e;")
+        
+        # 左側: グリッドビュー
+        grid_panel = QWidget()
+        grid_panel.setStyleSheet("background-color: #1e1e1e;")
+        right_layout = QVBoxLayout(grid_panel)
         right_layout.setContentsMargins(20, 20, 20, 20)
         right_layout.setSpacing(10)
 
@@ -86,24 +93,61 @@ class DuplicatePage(QWidget):
         header_layout.addWidget(self.btn_view_grid)
         header_layout.addWidget(self.btn_view_list)
 
+        size_label = QLabel(f"サムネイルサイズ: {self.thumbnail_size}px (Ctrl+ホイールで変更)")
+        size_label.setStyleSheet("color: #888; font-size: 11px;")
+        header_layout.addWidget(size_label)
         right_layout.addLayout(header_layout)
 
         # エリア
-        self.area = QScrollArea()
-        self.area.setWidgetResizable(True)
-        self.area.setStyleSheet("border: none; background-color: transparent;")
-
         self.container = QWidget()
         self.grid = QGridLayout(self.container)
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setSpacing(10)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-
+        
+        self.area = QScrollArea()
+        self.area.setWidgetResizable(True)
+        self.area.setStyleSheet("border: none; background-color: transparent;")
         self.area.setWidget(self.container)
+        # ホイールイベントをインストール
+        self.area.wheelEvent = self.on_wheel_event
+        
         right_layout.addWidget(self.area)
 
+        
+        # 右側: プレビューパネル
+        preview_panel = QFrame()
+        preview_panel.setFixedWidth(350)
+        preview_panel.setStyleSheet("background-color: #252526; border-left: 1px solid #3e3e42;")
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(15, 15, 15, 15)
+        preview_layout.setSpacing(15)
+        
+        preview_title = QLabel("プレビュー")
+        preview_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fff;")
+        preview_layout.addWidget(preview_title)
+        
+        self.preview_image = QLabel("画像を選択してください")
+        self.preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_image.setFixedSize(320, 320)
+        self.preview_image.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 4px;")
+        self.preview_image.setScaledContents(True)
+        preview_layout.addWidget(self.preview_image)
+        
+        self.preview_info = QLabel("")
+        self.preview_info.setStyleSheet("color: #aaa; font-size: 12px;")
+        self.preview_info.setWordWrap(True)
+        preview_layout.addWidget(self.preview_info)
+        
+        preview_layout.addStretch()
+        
+        right_splitter.addWidget(grid_panel)
+        right_splitter.addWidget(preview_panel)
+        right_splitter.setStretchFactor(0, 1)
+        right_splitter.setStretchFactor(1, 0)
+
         main_layout.addWidget(left_panel)
-        main_layout.addWidget(right_panel)
+        main_layout.addWidget(right_splitter)
 
     def load_data(self):
         self.list.clear()
@@ -130,32 +174,46 @@ class DuplicatePage(QWidget):
             # 辞書形式に変換して保持
             self.current_group_data = [{'id': f[0], 'path': f[1], 'size': f[2], 'mtime': f[3]} for f in files]
             self.render_items()
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to load duplicate group: {e}", exc_info=True)
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "エラー", "データの読み込みに失敗しました")
 
     def toggle_view(self, btn):
         self.view_mode = "grid" if btn == self.btn_view_grid else "list"
         if self.current_group_data:
             self.render_items()
-
+    
     def render_items(self):
         self.clear_grid()
         if self.view_mode == "grid":
             self.render_grid_view()
         else:
             self.render_list_view()
+        # サイズラベルを更新
+        size_label = self.findChild(QLabel)
+        if size_label and "サムネイルサイズ" in size_label.text():
+            size_label.setText(f"サムネイルサイズ: {self.thumbnail_size}px (Ctrl+ホイールで変更)")
 
     def render_grid_view(self):
-        cols = 5
-        thumb_size = 120
+        # 列数をサムネイルサイズに応じて調整
+        cols = max(3, int(800 / (self.thumbnail_size + 20)))  # 余白を考慮
+        thumb_size = self.thumbnail_size
+        frame_width = thumb_size + 20
+        frame_height = thumb_size + 60
 
         for i, data in enumerate(self.current_group_data):
             f = QFrame()
-            f.setFixedSize(140, 180)
+            f.setFixedSize(frame_width, frame_height)
             f.setStyleSheet("""
                 QFrame { background-color: #2d2d30; border: 1px solid #3e3e42; border-radius: 6px; }
                 QFrame:hover { border-color: #007acc; background-color: #353538; }
             """)
+            
+            # クリックイベントを追加（ラムダのクロージャ問題を回避）
+            def make_click_handler(d):
+                return lambda event: self.on_item_clicked(d)
+            f.mousePressEvent = make_click_handler(data)
 
             l = QVBoxLayout(f)
             l.setContentsMargins(8, 8, 8, 8)
@@ -185,6 +243,61 @@ class DuplicatePage(QWidget):
             l.addWidget(btn)
 
             self.grid.addWidget(f, i // cols, i % cols)
+    
+    def on_item_clicked(self, data):
+        """アイテムがクリックされたときの処理"""
+        self.selected_item_data = data
+        self.update_preview(data)
+    
+    def update_preview(self, data):
+        """プレビューを更新"""
+        if not data:
+            self.preview_image.clear()
+            self.preview_image.setText("画像を選択してください")
+            self.preview_info.setText("")
+            return
+        
+        # プレビュー画像を表示
+        pix = get_db_thumbnail(self.db, data['id'], data['path'], 300)
+        self.preview_image.setPixmap(pix)
+        
+        # ファイル情報を取得して表示
+        file_info = get_file_info(data['path'])
+        info_lines = []
+        info_lines.append(f"<b>ファイル名:</b> {os.path.basename(data['path'])}")
+        info_lines.append(f"<b>パス:</b> {data['path']}")
+        
+        if file_info['exists']:
+            info_lines.append(f"<b>ファイルサイズ:</b> {format_file_size(file_info['file_size'])}")
+            if file_info['image_width'] and file_info['image_height']:
+                info_lines.append(f"<b>画像サイズ:</b> {file_info['image_width']} × {file_info['image_height']} px")
+        else:
+            info_lines.append("<b style='color: #d83b01;'>ファイルが見つかりません</b>")
+        
+        self.preview_info.setText("<br>".join(info_lines))
+    
+    def on_wheel_event(self, event: QWheelEvent):
+        """ホイールイベント処理（Ctrl + ホイールでサムネイルサイズ変更）"""
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers == Qt.KeyboardModifier.ControlModifier:
+            # Ctrl + ホイールでサムネイルサイズを変更
+            delta = event.angleDelta().y()
+            if delta > 0:
+                # 拡大
+                new_size = min(self.thumbnail_size + config.GRID_THUMBNAIL_STEP, 
+                              config.MAX_GRID_THUMBNAIL_SIZE)
+            else:
+                # 縮小
+                new_size = max(self.thumbnail_size - config.GRID_THUMBNAIL_STEP, 
+                              config.MIN_GRID_THUMBNAIL_SIZE)
+            
+            if new_size != self.thumbnail_size:
+                self.thumbnail_size = new_size
+                if self.view_mode == "grid" and self.current_group_data:
+                    self.render_items()
+        else:
+            # 通常のスクロール
+            QScrollArea.wheelEvent(self.area, event)
 
     def render_list_view(self):
         thumb_size = 80
@@ -238,7 +351,11 @@ class DuplicatePage(QWidget):
         """
 
     def trash(self, fid, widget):
-        if self.db.move_to_trash(fid): widget.hide()
+        if self.db.move_to_trash(fid):
+            widget.hide()
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "削除失敗", "ファイルの削除に失敗しました。\nログを確認してください。")
 
     def clear_grid(self):
         while self.grid.count():

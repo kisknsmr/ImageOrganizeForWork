@@ -12,7 +12,7 @@ from PyQt6.QtGui import QAction, QIcon, QFileSystemModel, QPixmap, QImageReader
 
 # core.py からサムネイル取得関数などを利用
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import get_db_thumbnail, DatabaseManager
+from core import get_db_thumbnail, DatabaseManager, get_file_info, format_file_size
 
 logger = logging.getLogger(__name__)
 
@@ -283,8 +283,37 @@ class ManualSorterPage(QWidget):
 
         self.splitter.addWidget(right_widget)
 
-        self.splitter.setStretchFactor(0, 6)
-        self.splitter.setStretchFactor(1, 4)
+        # --- Preview Pane (Far Right) ---
+        preview_panel = QFrame()
+        preview_panel.setFrameShape(QFrame.Shape.StyledPanel)
+        preview_panel.setStyleSheet("background-color: #252526; border-left: 1px solid #3e3e42;")
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(15, 15, 15, 15)
+        preview_layout.setSpacing(15)
+        
+        preview_title = QLabel("プレビュー")
+        preview_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fff;")
+        preview_layout.addWidget(preview_title)
+        
+        self.preview_image = QLabel("画像を選択してください")
+        self.preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_image.setMinimumSize(200, 200)
+        self.preview_image.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 4px;")
+        self.preview_image.setScaledContents(True)
+        # 縦横比保持のためにPaintEventなどをいじるのは手間なので、setPixmap時にscaledする方針
+        preview_layout.addWidget(self.preview_image, 1) # Stretch
+        
+        self.preview_info = QLabel("")
+        self.preview_info.setStyleSheet("color: #aaa; font-size: 12px;")
+        self.preview_info.setWordWrap(True)
+        preview_layout.addWidget(self.preview_info)
+        
+        self.splitter.addWidget(preview_panel)
+
+
+        self.splitter.setStretchFactor(0, 4)
+        self.splitter.setStretchFactor(1, 3)
+        self.splitter.setStretchFactor(2, 3)
         main_layout.addWidget(self.splitter, 1)
 
         # 3. Action
@@ -380,10 +409,15 @@ class ManualSorterPage(QWidget):
 
     def get_file_id(self, path):
         try:
+            import sqlite3
             with self.db.lock:
                 row = self.db.conn.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
                 return row[0] if row else 0
-        except:
+        except sqlite3.Error as e:
+            logger.error(f"Database error in get_file_id: {e}")
+            return 0
+        except Exception as e:
+            logger.error(f"Unexpected error in get_file_id: {e}", exc_info=True)
             return 0
 
     def update_selection_count(self):
@@ -401,12 +435,46 @@ class ManualSorterPage(QWidget):
             self.list_source.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
 
     def on_item_clicked(self, item):
+        data = item.data(Qt.ItemDataRole.UserRole)
+        # Update preview regardless of mode
+        self.update_preview(data)
+        
         if not self.is_select_mode:
-            data = item.data(Qt.ItemDataRole.UserRole)
-            path = data['path']
-            if os.path.exists(path):
-                dialog = ImagePreviewDialog(path, self)
-                dialog.exec()
+            # In preview mode, maybe clicking just shows preview (already done above)
+            # Old dialog logic removed
+            pass
+
+    def update_preview(self, data):
+        if not data:
+            self.preview_image.clear()
+            self.preview_image.setText("画像を選択してください")
+            self.preview_info.setText("")
+            return
+            
+        path = data['path']
+        fid = data.get('id', 0)
+        
+        # Determine preview size based on widget size? Fixed 400px for now
+        pix = get_db_thumbnail(self.db, fid, path, 400)
+        if pix:
+            self.preview_image.setPixmap(pix)
+        else:
+             self.preview_image.setText("プレビュー不可")
+
+        # Info
+        file_info = get_file_info(path)
+        info_lines = []
+        info_lines.append(f"<b>ファイル名:</b> {os.path.basename(path)}")
+        info_lines.append(f"<b>パス:</b> {path}")
+        
+        if file_info['exists']:
+            info_lines.append(f"<b>ファイルサイズ:</b> {format_file_size(file_info['file_size'])}")
+            if file_info['image_width'] and file_info['image_height']:
+                info_lines.append(f"<b>画像サイズ:</b> {file_info['image_width']} × {file_info['image_height']} px")
+        else:
+            info_lines.append("<b style='color: #d83b01;'>ファイルが見つかりません</b>")
+        
+        self.preview_info.setText("<br>".join(info_lines))
 
     def show_tree_context_menu(self, pos):
         idx = self.tree_target.indexAt(pos)

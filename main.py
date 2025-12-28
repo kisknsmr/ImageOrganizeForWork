@@ -2,125 +2,45 @@ import sys
 import os
 import traceback
 import time
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QPushButton, QLabel, QFileDialog,
+                             QStackedWidget, QProgressBar, QListView, QFrame, QMessageBox)
+from PyQt6.QtCore import Qt, QSize, QTimer
 
 # --- クラッシュ対策 ---
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 sys.stdout.reconfigure(encoding='utf-8')
-print("--- APP START ---", flush=True)
 
-try:
-    print("Pre-loading torch library...", flush=True)
-    import torch
+# GUI Components
+from gui.splash import SplashScreen
+from gui.workers import AppLoader, DBResetWorker
+from gui.models import PhotoModel
 
-    print("Torch loaded.", flush=True)
-except ImportError:
-    print("Torch not found.", flush=True)
-
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPushButton, QLabel, QFileDialog,
-                             QStackedWidget, QProgressBar, QListView, QFrame, QMessageBox)
-from PyQt6.QtCore import Qt, QAbstractListModel, QSize, QThreadPool, QModelIndex, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QColor
-
-print("Loading Core...", flush=True)
-from core import DatabaseManager, ScannerThread, AnalyzerThread, ImageLoader, setup_logging
-
-print("Loading Modules...", flush=True)
-from modules.duplicate_ui import DuplicatePage
-from modules.blur_ui import BlurPage
-from modules.similarity_ui import SimilarityPage
-from modules.sorter_ui import SorterPage
-from modules.clustering_ui import ClusteringPage
-from modules.manual_sorter_ui import ManualSorterPage
-
-print("All Modules Loaded.", flush=True)
-setup_logging()
-
-
-# --- DBResetWorker ---
-class DBResetWorker(QThread):
-    finished = pyqtSignal(str)
-
-    def __init__(self, db, scanner, analyzer):
-        super().__init__()
-        self.db = db
-        self.scanner = scanner
-        self.analyzer = analyzer
-
-    def run(self):
-        print("DBResetWorker: Start resetting sequence...", flush=True)
-        if self.scanner and self.scanner.isRunning():
-            self.scanner.stop()
-            self.scanner.wait()
-        if self.analyzer and self.analyzer.isRunning():
-            self.analyzer.stop()
-            self.analyzer.wait()
-
-        print("DBResetWorker: Rebuilding DB...", flush=True)
-        try:
-            self.db.rebuild_db()
-            msg = "DB初期化完了"
-        except Exception as e:
-            msg = f"初期化エラー: {e}"
-        self.finished.emit(msg)
-
-
-class PhotoModel(QAbstractListModel):
-    def __init__(self, db_manager, icon_size=QSize(180, 180)):
-        super().__init__()
-        self.db = db_manager
-        self.file_list = []
-        self.image_cache = {}
-        self.icon_size = icon_size
-        self.thread_pool = QThreadPool()
-
-    def reload(self):
-        self.beginResetModel()
-        self.file_list = self.db.get_all_files()
-        self.image_cache.clear()
-        self.endResetModel()
-
-    def clear(self):
-        self.beginResetModel()
-        self.file_list = []
-        self.image_cache = {}
-        self.endResetModel()
-
-    def rowCount(self, parent=QModelIndex()):
-        return len(self.file_list)
-
-    def data(self, index, role):
-        if not index.isValid(): return None
-        row = index.row()
-        if role == Qt.ItemDataRole.DecorationRole:
-            if row in self.image_cache:
-                return self.image_cache[row]
-            else:
-                self.load_image_async(row)
-                return QColor("#2b2b2b")
-        if role == Qt.ItemDataRole.ToolTipRole: return self.file_list[row]
-        return None
-
-    def load_image_async(self, row):
-        if row in self.image_cache: return
-        loader = ImageLoader(row, self.file_list[row], self.icon_size)
-        loader.signals.finished.connect(self.on_loaded)
-        self.thread_pool.start(loader)
-
-    def on_loaded(self, row, image):
-        if row >= len(self.file_list): return
-        self.image_cache[row] = image
-        idx = self.index(row)
-        self.dataChanged.emit(idx, idx, [Qt.ItemDataRole.DecorationRole])
+# Global placeholders for lazy loaded modules
+# These will be populated by AppLoader
+DatabaseManager = None
+ScannerThread = None
+AnalyzerThread = None
+ImageLoader = None
+setup_logging = None
+config = None
+DuplicatePage = None
+BlurPage = None
+SimilarityPage = None
+SorterPage = None
+ClusteringPage = None
+ManualSorterPage = None
+SmallFileCleanerPage = None
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PhotoSortX - AI Edition (v2.1)")
-        self.resize(1300, 850)
+        self.setWindowTitle("PhotoSortX - AI Edition (v2.2)")
+        width, height = config.DEFAULT_WINDOW_SIZE
+        self.resize(width, height)
         self.setStyleSheet("""
             QMainWindow { background-color: #2b2b2b; }
             QWidget { color: #e0e0e0; font-family: 'Segoe UI', sans-serif; font-size: 14px; }
@@ -145,7 +65,7 @@ class MainWindow(QMainWindow):
 
         # --- Sidebar ---
         sidebar = QFrame()
-        sidebar.setFixedWidth(240)
+        sidebar.setFixedWidth(config.SIDEBAR_WIDTH)
         sidebar.setStyleSheet("background-color: #1e1e1e; border-right: 1px solid #333;")
         side_layout = QVBoxLayout(sidebar)
         side_layout.setContentsMargins(5, 10, 5, 10)
@@ -212,6 +132,11 @@ class MainWindow(QMainWindow):
         btn_cluster.clicked.connect(self.show_clustering_page)
         side_layout.addWidget(btn_cluster)
 
+        btn_small_cleaner = QPushButton("🗑️  小さいファイル削除")
+        btn_small_cleaner.setStyleSheet(btn_style)
+        btn_small_cleaner.clicked.connect(self.show_small_file_cleaner_page)
+        side_layout.addWidget(btn_small_cleaner)
+
         side_layout.addStretch()
 
         # D. SYSTEM
@@ -223,6 +148,12 @@ class MainWindow(QMainWindow):
         self.lbl_lib_info.setStyleSheet("font-size: 11px; color: #888; padding-left: 10px;")
         self.lbl_lib_info.setWordWrap(True)
         side_layout.addWidget(self.lbl_lib_info)
+
+        # 削除フォルダ設定
+        self.btn_trash_setting = QPushButton("🗑️ 削除フォルダ設定")
+        self.btn_trash_setting.setStyleSheet(btn_style)
+        self.btn_trash_setting.clicked.connect(self.setup_trash_folder)
+        side_layout.addWidget(self.btn_trash_setting)
 
         self.btn_reset = QPushButton("⚠️ DB全初期化")
         self.btn_reset.setStyleSheet("""
@@ -276,8 +207,10 @@ class MainWindow(QMainWindow):
         self.gallery_view.setViewMode(QListView.ViewMode.IconMode)
         self.gallery_view.setResizeMode(QListView.ResizeMode.Adjust)
         self.gallery_view.setUniformItemSizes(True)
-        self.gallery_view.setGridSize(QSize(200, 200))
-        self.gallery_view.setIconSize(QSize(180, 180))
+        grid_w, grid_h = config.GALLERY_GRID_SIZE
+        icon_w, icon_h = config.GALLERY_ICON_SIZE
+        self.gallery_view.setGridSize(QSize(grid_w, grid_h))
+        self.gallery_view.setIconSize(QSize(icon_w, icon_h))
         self.gallery_view.setSpacing(10)
         self.model = PhotoModel(self.db)
         self.gallery_view.setModel(self.model)
@@ -294,6 +227,7 @@ class MainWindow(QMainWindow):
         self.manual_sorter_page = ManualSorterPage(self.db)
         self.sorter_page = SorterPage(self.db)
         self.clustering_page = ClusteringPage()
+        self.small_file_cleaner_page = SmallFileCleanerPage(self.db)
 
         self.stack.addWidget(self.duplicate_page)
         self.stack.addWidget(self.blur_page)
@@ -301,12 +235,14 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.manual_sorter_page)
         self.stack.addWidget(self.sorter_page)
         self.stack.addWidget(self.clustering_page)
+        self.stack.addWidget(self.small_file_cleaner_page)
 
         main_layout.addWidget(sidebar)
         main_layout.addWidget(self.stack)
 
         self.update_library_info()
         QTimer.singleShot(500, self.check_startup_sync)
+        QTimer.singleShot(1000, self.check_trash_folder_setup)
 
     # --- Methods ---
     def update_library_info(self):
@@ -402,7 +338,6 @@ class MainWindow(QMainWindow):
     def show_similarity_page(self):
         self.stack.setCurrentWidget(self.sim_page)
 
-    # ★修正: 正しいメソッド名を呼び出し
     def show_manual_sorter_page(self):
         self.manual_sorter_page.refresh_source_list()
         self.stack.setCurrentWidget(self.manual_sorter_page)
@@ -414,13 +349,177 @@ class MainWindow(QMainWindow):
     def show_clustering_page(self):
         self.stack.setCurrentWidget(self.clustering_page)
 
+    def show_small_file_cleaner_page(self):
+        self.stack.setCurrentWidget(self.small_file_cleaner_page)
+
+    def check_trash_folder_setup(self):
+        """
+        起動時に削除フォルダが設定されているか確認
+        設定されていない場合は、デフォルトフォルダの作成を提案
+        """
+        trash_folder = self.db.get_trash_folder()
+        if not trash_folder:
+            default_trash = config.get_default_trash_folder()
+            
+            ans = QMessageBox.question(
+                self, 
+                "削除フォルダ設定",
+                "削除フォルダが設定されていません。\n\n"
+                f"デフォルト削除フォルダを作成しますか？\n\n"
+                f"場所: {default_trash}\n\n"
+                "後で「削除フォルダ設定」から変更できます。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if ans == QMessageBox.StandardButton.Yes:
+                try:
+                    os.makedirs(default_trash, exist_ok=True)
+                    self.db.set_trash_folder(default_trash)
+                    QMessageBox.information(
+                        self, 
+                        "設定完了",
+                        f"削除フォルダを設定しました:\n{default_trash}"
+                    )
+                except Exception as e:
+                    QMessageBox.critical(
+                        self,
+                        "エラー",
+                        f"削除フォルダの作成に失敗しました:\n{e}"
+                    )
+
+    def setup_trash_folder(self):
+        """
+        削除フォルダの設定ダイアログ
+        """
+        current_trash = self.db.get_trash_folder()
+        default_trash = config.get_default_trash_folder()
+        
+        msg = "削除フォルダを設定してください。\n\n"
+        if current_trash:
+            msg += f"現在の設定: {current_trash}\n\n"
+        else:
+            msg += "現在の設定: 未設定（デフォルトを使用）\n\n"
+        msg += f"デフォルト: {default_trash}\n\n"
+        msg += "フォルダを選択するか、「デフォルトを使用」を選択してください。"
+        
+        reply = QMessageBox.question(
+            self,
+            "削除フォルダ設定",
+            msg,
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+        
+        if reply == QMessageBox.StandardButton.Ok:
+            # フォルダ選択ダイアログ
+            folder = QFileDialog.getExistingDirectory(
+                self,
+                "削除フォルダを選択",
+                current_trash if current_trash else default_trash
+            )
+            
+            if folder:
+                # パス検証
+                if not config.validate_path(folder):
+                    QMessageBox.warning(
+                        self,
+                        "エラー",
+                        "無効なパスです。別のフォルダを選択してください。"
+                    )
+                    return
+                
+                # フォルダが存在しない場合は作成
+                if not os.path.exists(folder):
+                    try:
+                        os.makedirs(folder, exist_ok=True)
+                    except Exception as e:
+                        QMessageBox.critical(
+                            self,
+                            "エラー",
+                            f"フォルダの作成に失敗しました:\n{e}"
+                        )
+                        return
+                
+                # 設定を保存
+                self.db.set_trash_folder(folder)
+                QMessageBox.information(
+                    self,
+                    "設定完了",
+                    f"削除フォルダを設定しました:\n{folder}"
+                )
+            else:
+                # キャンセルされた場合、デフォルトを使用するか確認
+                if not current_trash:
+                    reply2 = QMessageBox.question(
+                        self,
+                        "デフォルト使用",
+                        f"デフォルト削除フォルダを使用しますか？\n\n{default_trash}",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                    )
+                    if reply2 == QMessageBox.StandardButton.Yes:
+                        try:
+                            os.makedirs(default_trash, exist_ok=True)
+                            self.db.set_trash_folder(default_trash)
+                            QMessageBox.information(
+                                self,
+                                "設定完了",
+                                f"デフォルト削除フォルダを設定しました:\n{default_trash}"
+                            )
+                        except Exception as e:
+                            QMessageBox.critical(
+                                self,
+                                "エラー",
+                                f"削除フォルダの作成に失敗しました:\n{e}"
+                            )
+
     def closeEvent(self, event):
         self.db.close()
         event.accept()
 
 
-if __name__ == "__main__":
+# --- Main Entry Point ---
+def main():
     app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
+    
+    # 1. Show Splash
+    splash = SplashScreen()
+    splash.show()
+    
+    # 2. Start Loading Thread
+    loader = AppLoader()
+    loader.progress.connect(splash.show_message)
+    
+    def on_loaded(loaded_objects):
+        # Unpack loaded modules to global scope
+        global DatabaseManager, ScannerThread, AnalyzerThread, ImageLoader
+        global setup_logging, config
+        global DuplicatePage, BlurPage, SimilarityPage, SorterPage
+        global ClusteringPage, ManualSorterPage, SmallFileCleanerPage
+        
+        DatabaseManager = loaded_objects.get('DatabaseManager')
+        ScannerThread = loaded_objects.get('ScannerThread')
+        AnalyzerThread = loaded_objects.get('AnalyzerThread')
+        ImageLoader = loaded_objects.get('ImageLoader')
+        setup_logging = loaded_objects.get('setup_logging')
+        config = loaded_objects.get('config')
+        
+        DuplicatePage = loaded_objects.get('DuplicatePage')
+        BlurPage = loaded_objects.get('BlurPage')
+        SimilarityPage = loaded_objects.get('SimilarityPage')
+        SorterPage = loaded_objects.get('SorterPage')
+        ClusteringPage = loaded_objects.get('ClusteringPage')
+        ManualSorterPage = loaded_objects.get('ManualSorterPage')
+        SmallFileCleanerPage = loaded_objects.get('SmallFileCleanerPage')
+    
+        # 3. Show Main Window
+        global window
+        window = MainWindow()
+        window.show()
+        splash.finish(window)
+        
+    loader.finished.connect(on_loaded)
+    loader.start()
+    
     sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()

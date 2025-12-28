@@ -8,12 +8,12 @@ from collections import deque
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                              QLabel, QPushButton, QSlider, QListWidgetItem,
                              QScrollArea, QFrame, QGridLayout, QApplication,
-                             QProgressBar, QSizePolicy, QButtonGroup)
+                             QProgressBar, QSizePolicy, QButtonGroup, QSplitter)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QIcon, QPalette, QColor
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import get_db_thumbnail, setup_logging, DatabaseManager
+from core import get_db_thumbnail, setup_logging, DatabaseManager, get_file_info, format_file_size
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +94,9 @@ class GroupingWorker(QThread):
             if not phash: continue
             try:
                 items.append({'id': fid, 'path': path, 'hash': int(phash, 16)})
-            except:
-                pass
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Failed to parse phash for file_id {fid}: {e}")
+                continue
             if i % 2000 == 0: self.progress.emit(10, 100)
 
         tree = VPTree(items)
@@ -213,9 +214,12 @@ class SimilarityPage(QWidget):
         left_layout.addWidget(self.list)
 
         # --- 右メインパネル ---
-        right_panel = QWidget()
-        right_panel.setStyleSheet("background-color: #1e1e1e;")
-        right_layout = QVBoxLayout(right_panel)
+        right_splitter = QSplitter(Qt.Orientation.Horizontal)
+        right_splitter.setStyleSheet("background-color: #1e1e1e;")
+
+        # Grid Panel
+        grid_panel = QWidget()
+        right_layout = QVBoxLayout(grid_panel)
         right_layout.setContentsMargins(20, 20, 20, 20)
         right_layout.setSpacing(10)
 
@@ -266,10 +270,41 @@ class SimilarityPage(QWidget):
 
         self.area.setWidget(self.container)
         right_layout.addWidget(self.area)
+        
+        right_splitter.addWidget(grid_panel)
+        
+        # Preview Panel
+        preview_panel = QFrame()
+        preview_panel.setFixedWidth(300)
+        preview_panel.setStyleSheet("background-color: #252526; border-left: 1px solid #3e3e42;")
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(15, 15, 15, 15)
+        preview_layout.setSpacing(15)
+        
+        lbl_p_title = QLabel("プレビュー")
+        lbl_p_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fff;")
+        preview_layout.addWidget(lbl_p_title)
+        
+        self.preview_image = QLabel("画像を選択")
+        self.preview_image.setFixedSize(270, 270)
+        self.preview_image.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3e3e42;")
+        self.preview_image.setScaledContents(True)
+        self.preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_layout.addWidget(self.preview_image)
+        
+        self.preview_info = QLabel("")
+        self.preview_info.setStyleSheet("color: #ccc; font-size: 12px;")
+        self.preview_info.setWordWrap(True)
+        preview_layout.addWidget(self.preview_info)
+        preview_layout.addStretch()
+        
+        right_splitter.addWidget(preview_panel)
+        right_splitter.setStretchFactor(0, 1) # Grid flexible
+        right_splitter.setStretchFactor(1, 0) # Preview fixed
 
         # 結合
         main_layout.addWidget(left_panel)
-        main_layout.addWidget(right_panel)
+        main_layout.addWidget(right_splitter)
 
     # --- Actions ---
     def on_change(self):
@@ -349,7 +384,12 @@ class SimilarityPage(QWidget):
                 QFrame { background-color: #2d2d30; border: 1px solid #3e3e42; border-radius: 6px; }
                 QFrame:hover { border-color: #007acc; background-color: #353538; }
             """)
-
+            
+            def make_cb(d):
+                return lambda ev: self.update_preview(d)
+            f.mousePressEvent = make_cb(data)
+            f.setCursor(Qt.CursorShape.PointingHandCursor)
+            
             l = QVBoxLayout(f)
             l.setContentsMargins(8, 8, 8, 8)
             l.setSpacing(5)
@@ -435,12 +475,43 @@ class SimilarityPage(QWidget):
         """
 
     def trash(self, fid, widget):
-        if self.db.move_to_trash(fid): widget.hide()
+        if self.db.move_to_trash(fid):
+            widget.hide()
+        else:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "削除失敗", "ファイルの削除に失敗しました。\nログを確認してください。")
 
     def clear_grid(self):
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget(): item.widget().deleteLater()
+
+    def update_preview(self, item):
+        if not item: return
+        
+        path = item['path']
+        fid = item['id']
+        
+        # Pixmap
+        pix = get_db_thumbnail(self.db, fid, path, 400)
+        if pix:
+            self.preview_image.setPixmap(pix)
+        else:
+            self.preview_image.setText("No Preview")
+            
+        # Info
+        info = get_file_info(path)
+        txt = []
+        txt.append(f"<b>ファイル名:</b> {os.path.basename(path)}")
+        txt.append(f"<b>パス:</b> {path}")
+        if info['exists']:
+            txt.append(f"<b>サイズ:</b> {format_file_size(info['file_size'])}")
+            if info['image_width']:
+                txt.append(f"<b>画像:</b> {info['image_width']} x {info['image_height']} px")
+        else:
+            txt.append("<b style='color:red;'>ファイルが見つかりません</b>")
+            
+        self.preview_info.setText("<br>".join(txt))
 
 
 if __name__ == "__main__":
