@@ -20,13 +20,16 @@ from PIL import Image, ImageOps, ImageFile
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QRunnable, QBuffer, QIODevice, QSize
 from PyQt6.QtGui import QImage, QImageReader, QColor, QPixmap
 
-# 設定
-from config import config
-from database import DatabaseManager
+# 設定（src パッケージ内）
+from .config import config
+from .database import DatabaseManager
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 logger = logging.getLogger(__name__)
+
+# 軽量ユーティリティを再エクスポート（後方互換のため）
+from .utils import path_under_root, format_eta, hamming_dist, format_file_size, format_file_size_kb
 
 
 def setup_logging() -> None:
@@ -34,16 +37,31 @@ def setup_logging() -> None:
     ロギング設定を初期化
     
     ファイルとコンソールの両方にログを出力します。
+    RotatingFileHandler でログファイルの肥大化を防止します。
     """
+    from logging.handlers import RotatingFileHandler
+
     log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.DEBUG)
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s [%(levelname)s] (%(threadName)s) - %(message)s',
-        handlers=[
-            logging.FileHandler(config.LOG_FILE, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
+    fmt = '%(asctime)s [%(levelname)s] (%(threadName)s) - %(message)s'
+
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return  # 重複初期化を防止
+
+    root_logger.setLevel(log_level)
+
+    # ファイルハンドラ（最大 5MB × 3 世代）
+    file_handler = RotatingFileHandler(
+        config.LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding='utf-8'
     )
+    file_handler.setFormatter(logging.Formatter(fmt))
+    root_logger.addHandler(file_handler)
+
+    # コンソールハンドラ
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(logging.Formatter(fmt))
+    root_logger.addHandler(console_handler)
+
     logging.getLogger("PIL").setLevel(logging.WARNING)
 
 
@@ -62,21 +80,67 @@ def create_error_pixmap(size: int) -> QPixmap:
     return QPixmap.fromImage(img)
 
 
-def get_db_thumbnail(db_manager: 'DatabaseManager', file_id: int, file_path: str, 
+def _generate_video_thumbnail(db_manager, file_id: int, file_path: str, size_wh: int) -> QPixmap:
+    """
+    動画ファイルの先頭フレームからサムネイルを生成。
+    cv2.VideoCapture でフレームを取得し、QPixmap に変換する。
+    """
+    try:
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            return create_error_pixmap(size_wh)
+
+        ret, frame = cap.read()
+        cap.release()
+
+        if not ret or frame is None:
+            return create_error_pixmap(size_wh)
+
+        # BGR → RGB
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = frame_rgb.shape
+        bytes_per_line = ch * w
+        q_img = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+
+        pix = QPixmap.fromImage(q_img)
+        if pix.isNull():
+            return create_error_pixmap(size_wh)
+
+        pix = pix.scaled(size_wh, size_wh, Qt.AspectRatioMode.KeepAspectRatio,
+                         Qt.TransformationMode.SmoothTransformation)
+
+        # DB にキャッシュ
+        if file_id and file_id > 0:
+            try:
+                buffer = QBuffer()
+                buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+                pix.save(buffer, "JPG", config.THUMBNAIL_QUALITY)
+                db_manager.save_thumbnail(file_id, bytes(buffer.data()))
+            except Exception as e:
+                logger.error(f"Failed to save video thumbnail to DB (id={file_id}): {e}")
+
+        return pix
+
+    except Exception as e:
+        logger.error(f"Failed to generate video thumbnail for {file_path}: {e}", exc_info=True)
+        return create_error_pixmap(size_wh)
+
+
+def get_db_thumbnail(db_manager: 'DatabaseManager', file_id: int, file_path: str,
                      size_wh: int = None) -> QPixmap:
     """
-    サムネイル取得関数
-    
+    サムネイル取得関数（縦横比保持）。
     DBにキャッシュがあればそれを返し、なければファイルから生成してDBに保存します。
-    
+    返す画像は幅・高さとも size_wh 以下に収まり、元画像の縦横比を保ちます。
+
     Args:
         db_manager: データベースマネージャーインスタンス
         file_id: ファイルID
         file_path: ファイルパス
-        size_wh: サムネイルサイズ（デフォルト: config.DEFAULT_THUMBNAIL_SIZE）
-        
+        size_wh: 最大幅・高さ（デフォルト: config.DEFAULT_THUMBNAIL_SIZE）
+
     Returns:
-        サムネイル画像のQPixmap
+        サムネイル画像のQPixmap（縦横比保持）
     """
     if size_wh is None:
         size_wh = config.DEFAULT_THUMBNAIL_SIZE
@@ -106,6 +170,13 @@ def get_db_thumbnail(db_manager: 'DatabaseManager', file_id: int, file_path: str
             logger.warning(f"File not found: {file_path}")
             return create_error_pixmap(size_wh)
 
+        ext = os.path.splitext(file_path)[1].lower()
+
+        # 2a. 動画の場合: cv2.VideoCapture で先頭フレームを取得
+        if ext in config.VIDEO_EXTENSIONS:
+            return _generate_video_thumbnail(db_manager, file_id, file_path, size_wh)
+
+        # 2b. 画像の場合: QImageReader で読み込み
         reader = QImageReader(file_path)
         reader.setAutoTransform(True)
 
@@ -141,23 +212,62 @@ def get_db_thumbnail(db_manager: 'DatabaseManager', file_id: int, file_path: str
         return create_error_pixmap(size_wh)
 
 
-def format_eta(seconds: float) -> str:
+def get_preview_image(file_path: str, max_size: int = 800) -> QPixmap:
     """
-    残り時間をフォーマット（HH:MM:SS または MM:SS）
+    プレビュー用画像取得関数
+    
+    元の画像比率を保ったまま、指定された最大サイズに収まるようにリサイズします。
+    サムネイルとは異なり、高画質で生成し、DBにはキャッシュしません。
     
     Args:
-        seconds: 残り秒数
+        file_path: ファイルパス
+        max_size: 最大幅/高さ（デフォルト: 800px）
         
     Returns:
-        フォーマットされた時間文字列
+        プレビュー画像のQPixmap
     """
-    if seconds < 0:
-        return "--:--"
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    if h > 0:
-        return f"{h:02d}:{m:02d}:{s:02d}"
-    return f"{m:02d}:{s:02d}"
+    # パス検証
+    if not config.validate_path(file_path):
+        logger.warning(f"Invalid path detected: {file_path}")
+        return create_error_pixmap(max_size)
+    
+    try:
+        if not os.path.exists(file_path):
+            logger.warning(f"File not found: {file_path}")
+            return create_error_pixmap(max_size)
+
+        ext = os.path.splitext(file_path)[1].lower()
+
+        # 動画の場合: cv2.VideoCapture で先頭フレームを取得
+        if ext in config.VIDEO_EXTENSIONS:
+            return _generate_video_thumbnail(None, 0, file_path, max_size)
+
+        reader = QImageReader(file_path)
+        reader.setAutoTransform(True)
+
+        orig_size = reader.size()
+        if orig_size.isValid():
+            scaled_size = orig_size.scaled(max_size, max_size, Qt.AspectRatioMode.KeepAspectRatio)
+            reader.setScaledSize(scaled_size)
+
+        img = reader.read()
+
+        if not img.isNull():
+            pix = QPixmap.fromImage(img)
+            return pix
+
+        return create_error_pixmap(max_size)
+
+    except (OSError, IOError) as e:
+        logger.error(f"IO error while generating preview image ({os.path.basename(file_path)}): {e}")
+        return create_error_pixmap(max_size)
+    except Exception as e:
+        logger.error(f"Unexpected error while generating preview image ({os.path.basename(file_path)}): {e}", 
+                     exc_info=True)
+        return create_error_pixmap(max_size)
+
+
+# format_eta は src.utils に移動済み（後方互換のため上で再エクスポート）
 
 
 def get_capture_time(path: str) -> float:
@@ -183,37 +293,7 @@ def get_capture_time(path: str) -> float:
         return 0.0
 
 
-def hamming_dist(h1: int, h2: int) -> int:
-    """
-    ハミング距離を計算（2つのハッシュ値の違い）
-    
-    Args:
-        h1: 最初のハッシュ値
-        h2: 2番目のハッシュ値
-        
-    Returns:
-        ハミング距離
-    """
-    return (h1 ^ h2).bit_count()
-
-
-def format_file_size(size_bytes: int) -> str:
-    """
-    ファイルサイズを人間が読みやすい形式にフォーマット
-    
-    Args:
-        size_bytes: バイト数
-        
-    Returns:
-        フォーマットされたサイズ文字列 (例: "1.5 MB")
-    """
-    if size_bytes < 0:
-        return "不明"
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.1f} PB"
+# hamming_dist, format_file_size, format_file_size_kb は src.utils に移動済み
 
 
 def get_file_info(path: str) -> dict:
@@ -246,8 +326,12 @@ def get_file_info(path: str) -> dict:
             with Image.open(path) as img:
                 result['image_width'] = img.width
                 result['image_height'] = img.height
-        except Exception:
-            pass  # 画像でない場合は無視
+        except (OSError, IOError) as e:
+            # 画像でない場合や読み込みエラーは無視（正常なケース）
+            logger.debug(f"Could not read image dimensions for {path}: {e}")
+        except Exception as e:
+            # 予期しないエラーはログに記録
+            logger.warning(f"Unexpected error reading image dimensions for {path}: {e}")
             
     except Exception as e:
         logger.warning(f"Failed to get file info for {path}: {e}")
@@ -269,6 +353,15 @@ class ScannerThread(QThread):
 
     def run(self):
         start = time.time()
+        try:
+            self.status.emit("DB登録パスの実在確認中...")
+            n_pruned = self.db.prune_missing_file_paths(include_trash=True)
+            if n_pruned:
+                logger.info(f"Scanner: pruned {n_pruned} missing path(s) from DB")
+                self.status.emit(f"実在しないパス {n_pruned} 件をDBから削除しました。フォルダ走査を続けます…")
+        except Exception as e:
+            logger.error(f"Scanner: prune_missing_file_paths failed: {e}", exc_info=True)
+
         self.status.emit(f"フォルダ走査中: {self.root}")
 
         disk_files = set()
@@ -297,7 +390,9 @@ class ScannerThread(QThread):
         db_files = set(os.path.normpath(p) for p in self.db.get_all_files())
         new_files = list(disk_files - db_files)
         missing_candidates = db_files - disk_files
-        missing_files = [p for p in missing_candidates if p.startswith(os.path.normpath(self.root))]
+
+        # 削除するのは「今回スキャンしたルート直下のパスで、ディスクに無いもの」のみ。
+        missing_files = [p for p in missing_candidates if path_under_root(p, self.root)]
 
         if missing_files:
             self.status.emit(f"削除同期: {len(missing_files)} 件の古い情報を削除中...")
@@ -331,7 +426,7 @@ class ScannerThread(QThread):
                         rem = (total - i) / (i / elap) if i > 0 else 0
                         self.status.emit(f"登録中: {i}/{total} 残り{format_eta(rem)}")
             except Exception as e:
-                print(f"Scanner Skip Error: {e}", flush=True)
+                logger.error(f"Scanner Skip Error for {p}: {e}", exc_info=True)
 
         self.db.set_setting("root_path", self.root)
         self.status.emit("完了")
@@ -373,15 +468,16 @@ class AnalyzerThread(QThread):
 
             with open(p, "rb") as f:
                 img_data = f.read()
-            
+
             nparr = np.frombuffer(img_data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
 
             if img is None:
                 logger.warning(f"Failed to decode image for blur calculation: {p}")
                 return 0.0
-            
-            return float(cv2.Laplacian(img, cv2.CV_64F).var())
+
+            blur_score = float(cv2.Laplacian(img, cv2.CV_64F).var())
+            return blur_score
         except (OSError, IOError) as e:
             logger.error(f"IO error calculating blur for {p}: {e}")
             return 0.0
@@ -411,7 +507,7 @@ class AnalyzerThread(QThread):
 
             with open(p, "rb") as f:
                 img_data = f.read()
-            
+
             nparr = np.frombuffer(img_data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
 
@@ -515,6 +611,71 @@ class AnalyzerThread(QThread):
         self.run_flag = False
 
 
+class FullHashThread(QThread):
+    """
+    完全ハッシュ計算スレッド（オプション機能）
+
+    簡易ハッシュ（先頭 8KB MD5）で重複候補になったファイルのみを対象に、
+    ファイル全体の MD5 を計算して full_hash カラムに保存する。
+    """
+    progress = pyqtSignal(int, int)   # (done, total)
+    status = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+        self.run_flag = True
+
+    def run(self):
+        self.status.emit("完全ハッシュ計算中…")
+
+        # 簡易ハッシュで重複候補になっているファイルだけ取得
+        files = self.db.get_files_needing_full_hash(limit=50000)
+        total = len(files)
+
+        if total == 0:
+            self.status.emit("完全ハッシュ: 対象ファイルなし")
+            self.finished.emit()
+            return
+
+        self.status.emit(f"完全ハッシュ: {total} 件を計算中…")
+        start = time.time()
+
+        for done, (fid, path, size) in enumerate(files, 1):
+            if not self.run_flag:
+                break
+
+            if not os.path.exists(path):
+                continue
+
+            try:
+                h = hashlib.md5()
+                with open(path, 'rb') as f:
+                    while True:
+                        chunk = f.read(1024 * 1024)  # 1 MB ずつ読み込み
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                self.db.update_full_hash(fid, h.hexdigest())
+            except (OSError, IOError) as e:
+                logger.warning(f"Full hash read error: {path}: {e}")
+            except Exception as e:
+                logger.error(f"Full hash error: {path}: {e}", exc_info=True)
+
+            if done % 10 == 0 or done == total:
+                elap = time.time() - start
+                rem = (total - done) / (done / elap) if elap > 0 else 0
+                self.status.emit(f"完全ハッシュ: {done}/{total} 残り{format_eta(rem)}")
+                self.progress.emit(done, total)
+
+        self.status.emit("完全ハッシュ: 完了")
+        self.finished.emit()
+
+    def stop(self):
+        self.run_flag = False
+
+
 class ImageLoader(QRunnable):
     """
     画像読み込み用のワーカークラス
@@ -543,26 +704,34 @@ class ImageLoader(QRunnable):
         """
         if not config.validate_path(self.path):
             logger.warning(f"Invalid path for ImageLoader: {self.path}")
-            self.signals.finished.emit(self.idx, create_error_pixmap(self.size.width()))
+            error_pixmap = create_error_pixmap(self.size.width())
+            error_img = error_pixmap.toImage()
+            self.signals.finished.emit(self.idx, error_img)
             return
-        
+
         try:
             reader = QImageReader(self.path)
             reader.setScaledSize(reader.size().scaled(self.size, Qt.AspectRatioMode.KeepAspectRatio))
             reader.setAutoTransform(True)
             img = reader.read()
-            
+
             if img.isNull():
                 logger.warning(f"Failed to read image: {self.path}")
-                self.signals.finished.emit(self.idx, create_error_pixmap(self.size.width()))
+                error_pixmap = create_error_pixmap(self.size.width())
+                error_img = error_pixmap.toImage()
+                self.signals.finished.emit(self.idx, error_img)
             else:
                 self.signals.finished.emit(self.idx, img)
         except (OSError, IOError) as e:
             logger.error(f"IO error loading image {self.path}: {e}")
-            self.signals.finished.emit(self.idx, create_error_pixmap(self.size.width()))
+            error_pixmap = create_error_pixmap(self.size.width())
+            error_img = error_pixmap.toImage()
+            self.signals.finished.emit(self.idx, error_img)
         except Exception as e:
             logger.error(f"Unexpected error loading image {self.path}: {e}", exc_info=True)
-            self.signals.finished.emit(self.idx, create_error_pixmap(self.size.width()))
+            error_pixmap = create_error_pixmap(self.size.width())
+            error_img = error_pixmap.toImage()
+            self.signals.finished.emit(self.idx, error_img)
 
 
 class ImageLoaderSignals(QObject): finished = pyqtSignal(int, QImage)

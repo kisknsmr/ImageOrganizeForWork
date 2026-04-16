@@ -4,41 +4,49 @@ import logging
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
                              QLabel, QPushButton, QSlider, QListWidgetItem,
                              QApplication, QFrame, QScrollArea, QGridLayout,
-                             QSizePolicy, QProgressBar, QButtonGroup, QSplitter)
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
-from PyQt6.QtGui import QIcon, QPalette, QColor
+                             QSizePolicy, QProgressBar, QButtonGroup, QSplitter,
+                             QMessageBox)
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QIcon, QPalette, QColor, QWheelEvent
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import get_db_thumbnail, setup_logging, DatabaseManager, get_file_info, format_file_size
+
+from src.core import setup_logging, get_file_info, format_file_size
+from src.database import DatabaseManager
+from src.config import config
+from gui.thumbnail_preview import (
+    get_thumbnail,
+    get_preview,
+    apply_thumbnail_to_label,
+    apply_preview_to_label,
+    open_file_in_viewer,
+    DEFAULT_PREVIEW_MAX_WIDTH,
+    DEFAULT_PREVIEW_MAX_HEIGHT,
+)
 
 logger = logging.getLogger(__name__)
 
 
+
 # --- Worker ---
 class BlurLoadWorker(QThread):
-    progress = pyqtSignal(int, int)
-    item_loaded = pyqtSignal(dict)  # 辞書ごと送る
-    finished = pyqtSignal(int)
+    """DB からピンボケ候補を取得するワーカー（データ取得のみ）"""
+    status = pyqtSignal(str)
+    all_loaded = pyqtSignal(list)   # 全件を一括で返す
 
     def __init__(self, db, threshold):
         super().__init__()
         self.db = db
         self.threshold = threshold
-        self.is_running = True
 
     def run(self):
-        rows = self.db.get_blurry_files(self.threshold)
-        total = len(rows)
-        for i, (fid, path) in enumerate(rows):
-            if not self.is_running: break
-            # データパッケージング
-            item = {'id': fid, 'path': path}
-            self.item_loaded.emit(item)
-            if i % 5 == 0: self.progress.emit(i + 1, total)
-        self.finished.emit(total)
-
-    def stop(self):
-        self.is_running = False
+        try:
+            self.status.emit("データベースを検索中…")
+            rows = self.db.get_blurry_files(self.threshold)
+            items = [{'id': fid, 'path': path} for fid, path in rows]
+            self.all_loaded.emit(items)
+        except Exception as e:
+            logger.error(f"Error in BlurLoadWorker.run: {e}", exc_info=True)
+            self.all_loaded.emit([])
 
 
 # --- UI ---
@@ -49,11 +57,55 @@ class BlurPage(QWidget):
         self.worker = None
         self.view_mode = "grid"
         self.loaded_items = []  # データを保持
+        self.last_cols = 0  # 最後に計算した列数
+        self.resize_timer = None  # リサイズデバウンス用タイマー
+        self.thumbnail_size = max(config.DEFAULT_GRID_THUMBNAIL_SIZE, 100)
         self.init_ui()
+    
+    def eventFilter(self, obj, event):
+        from PyQt6.QtCore import QEvent
+        if obj == self.area.viewport() and event.type() == QEvent.Type.Resize:
+            if self.loaded_items and self.view_mode == "grid":
+                if self.resize_timer:
+                    self.resize_timer.stop()
+                self.resize_timer = QTimer()
+                self.resize_timer.setSingleShot(True)
+                self.resize_timer.timeout.connect(self._on_resize_timeout)
+                self.resize_timer.start(150)
+        return super().eventFilter(obj, event)
+
+    def _on_resize_timeout(self):
+        """リサイズデバウンスタイマーのコールバック"""
+        if not self.loaded_items or self.view_mode != "grid":
+            return
+        current_cols = self._calc_cols()
+        if current_cols != self.last_cols:
+            self.last_cols = current_cols
+            self.render_all_items()
+
+    def _schedule_resize(self):
+        """スプリッター移動時のリサイズスケジュール"""
+        if not self.loaded_items or self.view_mode != "grid":
+            return
+        if self.resize_timer:
+            self.resize_timer.stop()
+        self.resize_timer = QTimer()
+        self.resize_timer.setSingleShot(True)
+        self.resize_timer.timeout.connect(self._on_resize_timeout)
+        self.resize_timer.start(150)
+
+    def _calc_cols(self):
+        """ビューポート幅から列数を計算"""
+        card_width = max(self.thumbnail_size, 100) + 40
+        spacing = 10
+        vw = self.area.viewport().width() - 20
+        if vw < card_width:
+            return 1
+        return max(1, vw // (card_width + spacing))
 
     def init_ui(self):
         self.setStyleSheet("""
-            QWidget { background-color: #1e1e1e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
+            QWidget { background-color: #1e1e1e; color: #e0e0e0; }
             QLabel { font-size: 13px; }
             QSlider::groove:horizontal { border: 1px solid #3e3e42; background: #2d2d30; height: 6px; border-radius: 3px; }
             QSlider::sub-page:horizontal { background: #d83b01; border-radius: 3px; }
@@ -68,11 +120,20 @@ class BlurPage(QWidget):
 
         # --- 左サイドパネル ---
         left_panel = QWidget()
-        left_panel.setFixedWidth(320)
+        left_panel.setMinimumWidth(250)
+        left_panel.setMaximumWidth(400)
         left_panel.setStyleSheet("border-right: 1px solid #3e3e42; background-color: #252526;")
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(15, 15, 15, 15)
         left_layout.setSpacing(15)
+
+        wf = QLabel(
+            "<b>ステップ②</b>　ブレやピント外しなど「失敗駒」を減らします。「① 重複チェック」の次です。"
+        )
+        wf.setTextFormat(Qt.TextFormat.RichText)
+        wf.setWordWrap(True)
+        wf.setStyleSheet("color: #9cdcfe; font-size: 11px; border: none;")
+        left_layout.addWidget(wf)
 
         # 設定エリア
         conf_box = QFrame()
@@ -149,8 +210,12 @@ class BlurPage(QWidget):
         self.view_group.addButton(self.btn_view_list)
         self.view_group.buttonClicked.connect(self.toggle_view)
 
+        self.size_hint_label = QLabel(f"サムネイル: {self.thumbnail_size}px (Ctrl+ホイールで変更)")
+        self.size_hint_label.setStyleSheet("color: #888; font-size: 11px;")
+
         header_layout.addWidget(header_lbl)
         header_layout.addStretch()
+        header_layout.addWidget(self.size_hint_label)
         header_layout.addWidget(self.btn_view_grid)
         header_layout.addWidget(self.btn_view_list)
 
@@ -167,13 +232,19 @@ class BlurPage(QWidget):
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.area.setWidget(self.container)
 
+        # リサイズイベントを監視してグリッドを再描画（ビューポート監視）
+        self.area.viewport().installEventFilter(self)
+        # ホイールイベント（Ctrl+ホイールでサムネイルサイズ変更）
+        self.area.wheelEvent = self._on_wheel_event
+
         right_layout.addWidget(self.area)
-        
+
         right_splitter.addWidget(grid_panel)
-        
+
         # Preview Panel
-        preview_panel = QFrame()
-        preview_panel.setFixedWidth(300)
+        self.preview_panel = preview_panel = QFrame()
+        preview_panel.setMinimumWidth(200)
+        preview_panel.setMaximumWidth(400)
         preview_panel.setStyleSheet("background-color: #252526; border-left: 1px solid #3e3e42;")
         preview_layout = QVBoxLayout(preview_panel)
         preview_layout.setContentsMargins(15, 15, 15, 15)
@@ -184,9 +255,9 @@ class BlurPage(QWidget):
         preview_layout.addWidget(lbl_p_title)
         
         self.preview_image = QLabel("画像を選択")
-        self.preview_image.setFixedSize(270, 270)
+        self.preview_image.setMinimumSize(150, 150)
+        self.preview_image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_image.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3e3e42;")
-        self.preview_image.setScaledContents(True)
         self.preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview_layout.addWidget(self.preview_image)
         
@@ -197,11 +268,12 @@ class BlurPage(QWidget):
         preview_layout.addStretch()
         
         right_splitter.addWidget(preview_panel)
-        right_splitter.setStretchFactor(0, 1) # Grid takes flexible space
-        right_splitter.setStretchFactor(1, 0) # Preview fixed
+        right_splitter.setStretchFactor(0, 1)
+        right_splitter.setStretchFactor(1, 0)
+        right_splitter.splitterMoved.connect(self._schedule_resize)
 
         main_layout.addWidget(left_panel)
-        main_layout.addWidget(right_splitter)
+        main_layout.addWidget(right_splitter, 1)
 
     def on_change(self):
         val = self.slider.value()
@@ -218,36 +290,105 @@ class BlurPage(QWidget):
             self.render_all_items()
 
     def load_data(self):
-        self.clear_grid()
-        self.loaded_items = []
-        self.btn_refresh.setEnabled(False)
-        self.progress.setValue(0)
-        self.lbl_status.setText("検索中...")
+        try:
+            self.clear_grid()
+            self.loaded_items = []
+            self._render_queue = []
+            self._render_index = 0
+            self.btn_refresh.setEnabled(False)
+            self.progress.setValue(0)
+            self.progress.setMaximum(0)  # indeterminate（ぐるぐる）
+            self.lbl_status.setText("データベースを検索中…")
 
-        threshold = self.slider.value()
-        self.worker = BlurLoadWorker(self.db, threshold)
-        self.worker.item_loaded.connect(self.on_item_loaded)
-        self.worker.progress.connect(lambda c, t: self.progress.setValue(int(c / t * 100) if t else 0))
-        self.worker.finished.connect(self.on_finished)
-        self.worker.start()
+            threshold = self.slider.value()
+            self.worker = BlurLoadWorker(self.db, threshold)
+            self.worker.status.connect(lambda msg: self.lbl_status.setText(msg))
+            self.worker.all_loaded.connect(self._on_all_loaded)
+            self.worker.start()
+        except Exception as e:
+            logger.error(f"Error in load_data: {e}", exc_info=True)
+            self.btn_refresh.setEnabled(True)
+            self.progress.setMaximum(100)
+            self.lbl_status.setText(f"エラー: {e}")
 
-    def on_item_loaded(self, item):
-        self.loaded_items.append(item)
-        # 逐次描画
-        self.add_single_item(item, len(self.loaded_items) - 1)
+    # ---- Phase 2: バッチ描画 ----
 
-    def on_finished(self, total):
-        self.btn_refresh.setEnabled(True)
-        self.progress.setValue(100)
+    RENDER_BATCH_SIZE = 20  # 1回のタイマーで描画するアイテム数
+
+    def _on_all_loaded(self, items: list):
+        """ワーカーから全件受け取り → バッチ描画を開始"""
+        total = len(items)
         if total == 0:
-            self.lbl_status.setText("該当なし")
-        else:
-            self.lbl_status.setText(f"完了: {total}枚")
+            self.btn_refresh.setEnabled(True)
+            self.progress.setMaximum(100)
+            self.progress.setValue(100)
+            self.lbl_status.setText("該当なし（閾値を変更してみてください）")
+            return
+
+        self.loaded_items = items
+        self._render_queue = list(items)
+        self._render_index = 0
+
+        self.progress.setMaximum(total)
+        self.progress.setValue(0)
+        self.lbl_status.setText(f"描画中: 0 / {total} 枚")
+
+        # QTimer でバッチ描画（UI をブロックしない）
+        self._render_timer = QTimer(self)
+        self._render_timer.setInterval(0)  # イベントループに空きができたら即実行
+        self._render_timer.timeout.connect(self._render_next_batch)
+        self._render_timer.start()
+
+    def _render_next_batch(self):
+        """バッチ単位で描画を進め、進捗を更新する"""
+        total = len(self._render_queue)
+        end = min(self._render_index + self.RENDER_BATCH_SIZE, total)
+
+        for i in range(self._render_index, end):
+            self.add_single_item(self._render_queue[i], i)
+
+        self._render_index = end
+        self.progress.setValue(end)
+        self.lbl_status.setText(f"描画中: {end} / {total} 枚")
+
+        if self._render_index >= total:
+            self._render_timer.stop()
+            self.btn_refresh.setEnabled(True)
+            self.progress.setValue(total)
+            self.lbl_status.setText(f"完了: {total} 枚")
 
     def render_all_items(self):
         self.clear_grid()
+        # last_colsをリセットして、列数を再計算
+        self.last_cols = 0
         for i, item in enumerate(self.loaded_items):
-            self.add_single_item(item, i)
+            try:
+                self.add_single_item(item, i)
+            except Exception as e:
+                import traceback
+                logger.error(f"Error adding item {i}: {e}\n{traceback.format_exc()}")
+        # サイズラベルを更新
+        self.size_hint_label.setText(f"サムネイル: {self.thumbnail_size}px (Ctrl+ホイールで変更)")
+        # レイアウトを更新
+        QApplication.processEvents()
+
+    def _on_wheel_event(self, event: QWheelEvent):
+        """Ctrl + ホイールでサムネイルサイズ変更"""
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers == Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                new_size = min(self.thumbnail_size + config.GRID_THUMBNAIL_STEP,
+                              config.MAX_GRID_THUMBNAIL_SIZE)
+            else:
+                new_size = max(self.thumbnail_size - config.GRID_THUMBNAIL_STEP,
+                              config.MIN_GRID_THUMBNAIL_SIZE)
+            if new_size != self.thumbnail_size:
+                self.thumbnail_size = new_size
+                if self.view_mode == "grid" and self.loaded_items:
+                    self.render_all_items()
+        else:
+            QScrollArea.wheelEvent(self.area, event)
 
     def add_single_item(self, item, index):
         if self.view_mode == "grid":
@@ -256,12 +397,16 @@ class BlurPage(QWidget):
             self.render_list_item(item, index)
 
     def render_grid_item(self, item, index):
-        cols = 5
+        if index == 0 or self.last_cols == 0:
+            self.last_cols = self._calc_cols()
+        cols = self.last_cols
         row, col = divmod(index, cols)
-        thumb_size = 120
+        thumb_size = max(self.thumbnail_size, 100)
 
         f = QFrame()
-        f.setFixedSize(140, 180)
+        frame_width = thumb_size + 40
+        frame_height = thumb_size + 80
+        f.setFixedSize(frame_width, frame_height)
         f.setStyleSheet("""
             QFrame { background-color: #2d2d30; border: 1px solid #3e3e42; border-radius: 6px; }
             QFrame:hover { border-color: #d83b01; background-color: #3e3e42; }
@@ -270,6 +415,10 @@ class BlurPage(QWidget):
         def make_cb(d):
             return lambda ev: self.update_preview(d)
         f.mousePressEvent = make_cb(item)
+
+        def make_dbl(d):
+            return lambda ev: self._open_in_viewer(d)
+        f.mouseDoubleClickEvent = make_dbl(item)
         f.setCursor(Qt.CursorShape.PointingHandCursor)
         
         l = QVBoxLayout(f)
@@ -277,11 +426,8 @@ class BlurPage(QWidget):
         l.setSpacing(2)
 
         lbl = QLabel()
-        pix = get_db_thumbnail(self.db, item['id'], item['path'], thumb_size)
-        lbl.setPixmap(pix)
-        lbl.setScaledContents(True)
-        lbl.setFixedSize(thumb_size, thumb_size)
-        lbl.setStyleSheet("border: none; border-radius: 4px; background: #000;")
+        pix = get_thumbnail(self.db, item['id'], item['path'], thumb_size)
+        apply_thumbnail_to_label(lbl, pix, thumb_size, style_sheet="border: none; border-radius: 4px; background: #000;")
 
         name_lbl = QLabel(os.path.basename(item['path']))
         name_lbl.setStyleSheet("border: none; font-size: 10px; color: #ccc;")
@@ -309,16 +455,19 @@ class BlurPage(QWidget):
             QFrame { background-color: #2d2d30; border: 1px solid #3e3e42; border-radius: 6px; }
             QFrame:hover { border-color: #d83b01; background-color: #353538; }
         """)
+        f.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        def make_dbl(d):
+            return lambda ev: self._open_in_viewer(d)
+        f.mouseDoubleClickEvent = make_dbl(item)
+
         l = QHBoxLayout(f)
         l.setContentsMargins(10, 10, 10, 10)
         l.setSpacing(15)
 
         lbl = QLabel()
-        pix = get_db_thumbnail(self.db, item['id'], item['path'], thumb_size)
-        lbl.setPixmap(pix)
-        lbl.setScaledContents(True)
-        lbl.setFixedSize(thumb_size, thumb_size)
-        lbl.setStyleSheet("border: none; border-radius: 4px; background: #000;")
+        pix = get_thumbnail(self.db, item['id'], item['path'], thumb_size)
+        apply_thumbnail_to_label(lbl, pix, thumb_size, style_sheet="border: none; border-radius: 4px; background: #000;")
 
         info_layout = QVBoxLayout()
         name_lbl = QLabel(os.path.basename(item['path']))
@@ -349,30 +498,49 @@ class BlurPage(QWidget):
             QPushButton:pressed { background-color: #b33000; }
         """
 
-    def trash(self, fid, widget):
-        if self.db.move_to_trash(fid):
-            widget.hide()
-        else:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "削除失敗", "ファイルの削除に失敗しました。\nログを確認してください。")
-
+    def clear_grid(self):
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget(): item.widget().deleteLater()
+
+    def _open_in_viewer(self, item):
+        """デフォルトビューアで画像を開く"""
+        if not open_file_in_viewer(item['path']):
+            QMessageBox.warning(self, "エラー", f"ファイルを開けませんでした:\n{item['path']}")
+
+    def trash(self, fid, widget):
+        result = self.db.move_to_trash(fid)
+        if result:
+            # loaded_itemsから削除
+            self.loaded_items = [item for item in self.loaded_items if item.get('id') != fid]
+            # ウィジェットを削除（グリッドから削除して非表示にする）
+            self.grid.removeWidget(widget)
+            widget.hide()
+            widget.deleteLater()
+            # グリッドを再描画して、残りのアイテムを正しく配置する
+            if self.view_mode == "grid":
+                self.render_all_items()
+        else:
+            QMessageBox.warning(self, "削除失敗", "ファイルの削除に失敗しました。\nログを確認してください。")
+
             
     def update_preview(self, item):
-        if not item: return
-        
+        if not item:
+            return
         path = item['path']
-        fid = item['id']
-        
-        # Pixmap
-        pix = get_db_thumbnail(self.db, fid, path, 400)
-        if pix:
-            self.preview_image.setPixmap(pix)
-        else:
+        pix = get_preview(path)
+        panel_w = self.preview_panel.width() - 30
+        if panel_w < 100:
+            panel_w = DEFAULT_PREVIEW_MAX_WIDTH
+        apply_preview_to_label(
+            self.preview_image, pix,
+            max_width=panel_w,
+            max_height=DEFAULT_PREVIEW_MAX_HEIGHT,
+            style_sheet="background-color: #1e1e1e; border: 1px solid #3e3e42;",
+        )
+        if pix.isNull():
             self.preview_image.setText("No Preview")
-            
+
         # Info
         info = get_file_info(path)
         txt = []

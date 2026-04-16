@@ -1,202 +1,131 @@
-# PhotoSortX - AI Edition
+# PhotoSortX（v2.3）
 
-AIを活用した高機能な画像整理・管理アプリケーション
-
-## 概要
-
-PhotoSortXは、大量の写真を効率的に整理・管理するためのデスクトップアプリケーションです。AI技術を活用した自動分類、重複検出、類似画像検出、ピンボケ検出などの機能を提供します。
+AI を併用できる画像整理・管理用デスクトップアプリ（PyQt6）です。フォルダ同期、解析、重複・ピンボケ・類似の整理、手動仕分け、スマート整理（CLIP）などをまとめて扱えます。
 
 ## 主な機能
 
-### 📂 メイン機能
-- **フォルダ同期**: 指定フォルダ内の画像を自動スキャン・同期
-- **ギャラリー表示**: 登録された画像を一覧表示
+| 区分 | 内容 |
+|------|------|
+| メイン | フォルダ同期（Scan）、詳細解析（Analyze）、ギャラリー |
+| クリーンアップ | 重複（MD5）、ピンボケ（Laplacian）、類似（pHash + VP-Tree）、極小ファイル削除 |
+| 整理 | 手動仕分け、スマート整理（イベントグルーピング + CLIP）、削除済み一覧 |
 
-### 🗑️ クリーンアップ機能
-- **重複整理**: MD5ハッシュによる完全一致の重複画像を検出・整理
-- **ピンボケ整理**: Laplacian分散によるピンボケ画像の検出・整理
-- **類似整理**: VP-Treeアルゴリズムによる類似画像の検出・整理
+## デザイン
 
-### 📦 整理機能
-- **手動仕分け**: 2ペインモードで直感的に画像を仕分け
-- **スマート整理 (AI)**: CLIPモデルによるAI自動分類
-- **自動グルーピング**: DBSCANクラスタリングによる自動グループ化
+`src/theme.py` でトークン管理する **ダーク UI**（例: 背景 `#242424`、サイドバー `#1a1a1a`、アクセント青）です。リポジトリ同梱の可変フォント（`fonts/` の Inter / Noto Sans JP / Roboto）を読み込み、利用可能なら UI フォントに使います。
 
-## システム要件
+## 要件
 
-- Python 3.8以上
-- Windows 10/11 (他のOSでも動作可能)
-- 最低2GB RAM（AI機能使用時は4GB以上推奨）
+- **Python 3.10 以上**（`pyproject.toml` の `requires-python` に準拠）
+- Windows を主対象にしていますが、PyQt6 が動く環境であれば他 OS も想定できます
+- AI（スマート整理）利用時は **GPU なしでも可**ですが、メモリ・ディスクに余裕があると安全です（初回はモデル取得でネットワークが必要な場合があります）
 
-## インストール
-
-### 1. リポジトリのクローン
+## セットアップ
 
 ```bash
 git clone <repository-url>
 cd ImageOrganizeForWork
-```
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# Linux / macOS
+source .venv/bin/activate
 
-### 2. 依存ライブラリのインストール
-
-#### 必須ライブラリのみ（AI機能なし）
-
-```bash
 pip install -r requirements.txt
 ```
 
-#### 全機能を使用する場合
+### AI（任意）
+
+`requirements.txt` には含めていません（コアのみ軽量化）。スマート整理を使う場合は例えば次で追加します。
 
 ```bash
-pip install PyQt6 imagehash opencv-python numpy Pillow torch transformers scikit-learn
+pip install "torch>=2.2" "transformers>=4.37"
 ```
 
-**注意**: AI機能（スマート整理・自動グルーピング）を使用する場合は、`torch`と`transformers`のインストールが必要です。初回起動時にモデルが自動ダウンロードされます（数GBの容量が必要です）。
+または開発用にリポジトリから一括:
 
-## 使い方
+```bash
+pip install -e ".[ai]"
+```
 
-### 起動
+詳細は [AI_SETUP_GUIDE.md](AI_SETUP_GUIDE.md) を参照してください。
+
+### パッケージとして入れる場合
+
+```bash
+pip install -e .
+```
+
+コンソールエントリ `photosortx` が有効になります（依存関係は別途 `pip install -r requirements.txt` などで入れてください）。フォントはリポジトリの `fonts/` を参照するため、**配布 zip 利用時は `fonts` をアプリと同じ階層に含める**か、開発と同様にリポジトリ全体を配置してください。
+
+## 起動
 
 ```bash
 python main.py
 ```
 
-### 基本的なワークフロー
+インストール済みの場合:
 
-1. **フォルダ同期 (Scan)**
-   - 「1. フォルダ同期 (Scan)」ボタンをクリック
-   - 整理したい画像フォルダを選択
-   - アプリが自動的に画像をスキャンしてデータベースに登録
+```bash
+photosortx
+```
 
-2. **詳細解析 (Analyze)**
-   - 「2. 詳細解析 (Analyze)」ボタンをクリック
-   - 画像のハッシュ値、ピンボケスコア、類似度などの解析を実行
+## ログ
 
-3. **整理機能の使用**
-   - サイドバーから目的の機能を選択
-   - 重複・ピンボケ・類似画像の検出と整理
-   - 手動仕分けやAIによる自動分類
+`src/config.py` の `LOG_LEVEL`（既定は `DEBUG`）と `LOG_FILE`（既定 `debug.log`）で制御します。ローテーション付きファイル出力とコンソール出力を使い分けます。本番利用時は `INFO` などへの変更を推奨します。
 
-## 機能詳細
+## 設定・データ
 
-### 重複整理
-- MD5ハッシュによる完全一致の検出
-- グリッド/リスト表示の切り替え
-- 一括削除機能
+- 設定の定数・既定値: `src/config.py` の `AppConfig`（インスタンス `config`）
+- SQLite: 既定でカレントディレクトリの `photos.db`（`config.DB_NAME`）
 
-### ピンボケ整理
-- 閾値スライダーで感度調整
-- リアルタイムでリスト更新
-- ピンボケ画像の一括削除
-
-### 類似整理
-- VP-Treeアルゴリズムによる高速検索
-- 距離閾値の調整可能
-- 類似画像グループの表示
-
-### スマート整理 (AI)
-- CLIPモデルによる画像理解
-- フォルダ名から自動学習
-- 類似度スコア表示
-
-### 自動グルーピング
-- DBSCANクラスタリング
-- 最大1000枚まで処理
-- グループ単位での移動
-
-## 設定
-
-設定は`config.py`で管理されています。主な設定項目：
-
-- ファイルサイズ制限
-- バッチ処理サイズ
-- サムネイル設定
-- 類似検索閾値
-- ピンボケ検出閾値
-
-## データベース
-
-アプリケーションはSQLiteデータベース（`photos.db`）を使用して画像のメタデータを保存します。
-
-- **files**: 画像ファイルのメタデータ
-- **thumbnails**: サムネイル画像（BLOB）
-- **settings**: アプリケーション設定
-
-## トラブルシューティング
-
-### AI機能が動作しない
-
-- `torch`と`transformers`がインストールされているか確認
-- 初回起動時にモデルのダウンロードが完了しているか確認
-- インターネット接続が必要です（初回のみ）
-
-### メモリ不足エラー
-
-- 大量の画像を処理する場合は、バッチサイズを小さくする
-- `config.py`の`BATCH_SIZE_*`設定を調整
-
-### パフォーマンスが遅い
-
-- データベースのインデックスが正しく作成されているか確認
-- 不要な画像を削除してデータベースを最適化
-- 「DB全初期化」でデータベースをリセット
-
-## 開発
-
-### プロジェクト構造
+## プロジェクト構成（抜粋）
 
 ```
 ImageOrganizeForWork/
-├── main.py              # メインアプリケーション
-├── core.py              # コア機能（DB、画像処理）
-├── config.py            # 設定管理
-├── modules/             # UIモジュール
-│   ├── duplicate_ui.py  # 重複整理UI
-│   ├── blur_ui.py       # ピンボケ整理UI
-│   ├── similarity_ui.py  # 類似整理UI
-│   ├── sorter_ui.py    # スマート整理UI
-│   ├── clustering_ui.py # 自動グルーピングUI
-│   ├── manual_sorter_ui.py  # 手動仕分けUI
-│   └── ai_classifier.py # AI分類機能
-├── requirements.txt     # 依存ライブラリ
-└── README.md           # このファイル
+├── main.py                 # エントリ（起動・メインウィンドウ）
+├── pyproject.toml          # メタデータ・任意依存 ai・ビルド設定
+├── requirements.txt        # コア依存のみ
+├── MANIFEST.in             # sdist 用（フォント等）
+├── fonts/                  # UI 用フォント（任意）
+├── src/
+│   ├── config.py
+│   ├── core.py             # スキャン・解析・画像 I/O
+│   ├── database.py
+│   ├── theme.py
+│   └── utils.py
+├── gui/
+│   ├── gallery_page.py
+│   ├── icons.py
+│   ├── models.py
+│   ├── splash.py
+│   ├── thumbnail_preview.py
+│   └── workers.py          # 遅延ロード（起動を速くする）
+├── modules/                # 各機能ページ UI
+└── tests/                  # unittest（python tests/run_tests.py）
 ```
 
-### テスト
+## テスト
 
 ```bash
-pytest tests/
+python tests/run_tests.py
 ```
 
-### ログ
+（`pytest` 未導入でも上記で全テストを実行できます。）
 
-アプリケーションのログは`debug.log`に出力されます。
+## トラブルシューティング（要約）
 
-## ライセンス
+| 現象 | 確認 |
+|------|------|
+| AI が動かない | `torch` / `transformers` の導入、初回モデル取得、オフライン時は `HF_OFFLINE_MODE` など `src/config.py` |
+| メモリ不足 | バッチ系定数の縮小、AI 未使用なら AI パッケージを外す |
+| 遅い | `LOW_LOAD_MODE`、DB の整理、不要データの削減 |
 
-このプロジェクトのライセンス情報をここに記載してください。
+## ライセンス・履歴
 
-## 貢献
-
-バグ報告や機能要望は、Issueでお知らせください。
-
-## 更新履歴
-
-### v2.1
-- エラーハンドリングの改善
-- 型ヒントの追加
-- ドキュメントの充実
-- セキュリティの強化
-- リソース管理の改善
-
-## 作者
-
-[あなたの名前]
+- ライセンス: [LICENSE](LICENSE)（MIT）
+- 更新履歴: [CHANGELOG.md](CHANGELOG.md)
 
 ## 謝辞
 
-- PyQt6: GUIフレームワーク
-- OpenCV: 画像処理
-- CLIP (OpenAI): AI画像分類
-- scikit-learn: クラスタリング
-
+PyQt6、OpenCV、Pillow、scikit-learn、CLIP / Hugging Face エコシステムを利用しています。

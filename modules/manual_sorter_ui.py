@@ -1,18 +1,23 @@
-import sys
 import os
-import shutil
 import logging
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                              QTreeView, QAbstractItemView, QPushButton,
                              QLabel, QMessageBox, QMenu, QInputDialog, QFrame,
                              QListWidget, QListWidgetItem, QProgressBar, QSizePolicy,
-                             QDialog, QScrollArea, QFileDialog)
+                             QFileDialog)
 from PyQt6.QtCore import Qt, QSize, QDir, QThread, pyqtSignal
-from PyQt6.QtGui import QAction, QIcon, QFileSystemModel, QPixmap, QImageReader
+from PyQt6.QtGui import QAction, QIcon, QFileSystemModel, QPixmap
 
-# core.py からサムネイル取得関数などを利用
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import get_db_thumbnail, DatabaseManager, get_file_info, format_file_size
+
+from src.core import get_file_info, format_file_size
+from src.database import DatabaseManager
+from gui.thumbnail_preview import (
+    get_thumbnail,
+    get_preview,
+    apply_preview_to_label,
+    DEFAULT_PREVIEW_MAX_WIDTH,
+    DEFAULT_PREVIEW_MAX_HEIGHT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,44 +114,6 @@ class MoveFilesWorker(QThread):
         self.is_running = False
 
 
-# --- Preview Dialog ---
-class ImagePreviewDialog(QDialog):
-    def __init__(self, path, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(f"プレビュー: {os.path.basename(path)}")
-        self.resize(800, 600)
-        self.setStyleSheet("background-color: #1e1e1e; color: white;")
-
-        layout = QVBoxLayout(self)
-        lbl = QLabel()
-
-        try:
-            reader = QImageReader(path)
-            reader.setAutoTransform(True)
-            size = reader.size()
-            if size.isValid() and (size.width() > 1600 or size.height() > 1600):
-                size.scale(1600, 1600, Qt.AspectRatioMode.KeepAspectRatio)
-                reader.setScaledSize(size)
-
-            img = reader.read()
-            if not img.isNull():
-                pix = QPixmap.fromImage(img)
-                lbl.setPixmap(pix.scaled(800, 600, Qt.AspectRatioMode.KeepAspectRatio,
-                                         Qt.TransformationMode.SmoothTransformation))
-            else:
-                lbl.setText("プレビュー不可")
-        except Exception:
-            lbl.setText("プレビュー不可")
-
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl)
-
-        btn_close = QPushButton("閉じる")
-        btn_close.clicked.connect(self.close)
-        btn_close.setStyleSheet("background-color: #444; color: white; padding: 8px;")
-        layout.addWidget(btn_close)
-
-
 # --- Main UI ---
 class ManualSorterPage(QWidget):
     def __init__(self, db_manager):
@@ -159,31 +126,47 @@ class ManualSorterPage(QWidget):
         self.init_ui()
 
     def init_ui(self):
+        self.setStyleSheet("""
+            QWidget { background-color: #1e1e1e; color: #e0e0e0; }
+            QSplitter::handle { background-color: #3e3e42; }
+            QSplitter::handle:horizontal { width: 3px; }
+        """)
+
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(5)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
         # 1. Header
         header_frame = QFrame()
-        header_layout = QHBoxLayout(header_frame)
-        header_layout.setContentsMargins(0, 0, 0, 5)
-        title_lbl = QLabel("🗂 手動仕分け (2ペインモード)")
+        header_frame.setMinimumHeight(48)
+        header_frame.setStyleSheet("background-color: #2d2d30; border-bottom: 1px solid #3e3e42;")
+        header_layout = QVBoxLayout(header_frame)
+        header_layout.setContentsMargins(15, 6, 15, 6)
+        header_layout.setSpacing(2)
+        title_row = QHBoxLayout()
+        title_lbl = QLabel("🗂 手動仕分け（ステップ⑤）")
         title_lbl.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffffff;")
-        header_layout.addWidget(title_lbl)
-        header_layout.addStretch()
+        title_row.addWidget(title_lbl)
+        title_row.addStretch()
+        header_layout.addLayout(title_row)
+        sub_lbl = QLabel("メイン整理フローの最終段階。残す／捨てる・フォルダ分けに使います")
+        sub_lbl.setStyleSheet("font-size: 11px; color: #888; font-weight: normal;")
+        header_layout.addWidget(sub_lbl)
         main_layout.addWidget(header_frame)
 
-        # 2. Splitter
+        # 2. Splitter（メインコンテンツ）
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setHandleWidth(2)
-        self.splitter.setStyleSheet("QSplitter::handle { background-color: #444; }")
 
-        # --- Left Pane ---
+        # =========================================
+        # 左ペイン: ソース画像一覧
+        # =========================================
         left_widget = QWidget()
+        left_widget.setMinimumWidth(300)
         left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 5, 0)
+        left_layout.setContentsMargins(8, 8, 4, 8)
+        left_layout.setSpacing(6)
 
-        # Breadcrumb
+        # パンくずナビ
         nav_bar = QFrame()
         nav_bar.setStyleSheet("background-color: #252526; border-radius: 4px; border: 1px solid #3e3e42;")
         nav_layout = QHBoxLayout(nav_bar)
@@ -193,50 +176,67 @@ class ManualSorterPage(QWidget):
         self.breadcrumb.path_clicked.connect(self.load_images)
 
         self.btn_folder_menu = QPushButton("▼")
-        self.btn_folder_menu.setFixedWidth(25)
+        self.btn_folder_menu.setFixedSize(28, 28)
+        self.btn_folder_menu.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_folder_menu.setStyleSheet(
-            "QPushButton { border: none; color: #aaa; } QPushButton:hover { color: white; background-color: #444; }")
+            "QPushButton { border: none; color: #aaa; border-radius: 4px; } "
+            "QPushButton:hover { color: white; background-color: #444; }")
         self.btn_folder_menu.clicked.connect(self.show_source_folder_menu)
 
         btn_refresh = QPushButton("🔄")
-        btn_refresh.setFixedWidth(30)
-        btn_refresh.setStyleSheet("QPushButton { border: none; color: #aaa; } QPushButton:hover { color: white; }")
+        btn_refresh.setFixedSize(28, 28)
+        btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_refresh.setStyleSheet(
+            "QPushButton { border: none; color: #aaa; border-radius: 4px; } "
+            "QPushButton:hover { color: white; background-color: #444; }")
         btn_refresh.clicked.connect(self.refresh_source_list)
 
         nav_layout.addWidget(self.breadcrumb, 1)
         nav_layout.addWidget(self.btn_folder_menu)
         nav_layout.addWidget(btn_refresh)
-
         left_layout.addWidget(nav_bar)
 
-        # Mode Toggle
-        mode_layout = QHBoxLayout()
-        self.btn_mode_toggle = QPushButton("現在: 🔍 プレビューモード (クリックで拡大)")
+        # モード切替
+        self.btn_mode_toggle = QPushButton("🔍 プレビューモード（クリックで切替）")
         self.btn_mode_toggle.setCheckable(True)
+        self.btn_mode_toggle.setFixedHeight(30)
+        self.btn_mode_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_mode_toggle.setStyleSheet("""
-            QPushButton { background-color: #333; color: #ddd; border: 1px solid #555; padding: 6px; }
+            QPushButton { background-color: #333; color: #ddd; border: 1px solid #555;
+                          padding: 4px 10px; border-radius: 4px; font-size: 12px; }
             QPushButton:checked { background-color: #d83b01; color: white; border-color: #d83b01; }
         """)
         self.btn_mode_toggle.toggled.connect(self.toggle_selection_mode)
-        mode_layout.addWidget(self.btn_mode_toggle)
-        left_layout.addLayout(mode_layout)
+        left_layout.addWidget(self.btn_mode_toggle)
 
-        # Thumbnails
+        # サムネイル一覧
         self.list_source = QListWidget()
         self.list_source.setViewMode(QListWidget.ViewMode.IconMode)
         self.list_source.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.list_source.setIconSize(QSize(140, 140))  # サムネイルサイズ
+        self.list_source.setIconSize(QSize(140, 140))
         self.list_source.setSpacing(6)
-        self.list_source.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3e3e42;")
+        self.list_source.setStyleSheet(
+            "QListWidget { background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 4px; outline: none; }"
+            "QListWidget::item:selected { background-color: #007acc; border-radius: 4px; }")
         self.list_source.itemClicked.connect(self.on_item_clicked)
-        left_layout.addWidget(self.list_source)
+        left_layout.addWidget(self.list_source, 1)
 
-        # Footer
+        # フッター（選択数 + 全選択ボタン）
         sel_layout = QHBoxLayout()
+        sel_layout.setContentsMargins(0, 0, 0, 0)
         self.lbl_selection_count = QLabel("0 枚選択中")
+        self.lbl_selection_count.setStyleSheet("color: #888; font-size: 11px;")
         self.list_source.itemSelectionChanged.connect(self.update_selection_count)
+
         btn_sel_all = QPushButton("全選択")
+        btn_sel_all.setFixedHeight(26)
+        btn_sel_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_sel_all.setStyleSheet(
+            "QPushButton { background-color: #333; color: #ccc; border: 1px solid #555; "
+            "border-radius: 4px; padding: 2px 12px; font-size: 11px; }"
+            "QPushButton:hover { background-color: #444; }")
         btn_sel_all.clicked.connect(self.list_source.selectAll)
+
         sel_layout.addWidget(self.lbl_selection_count)
         sel_layout.addStretch()
         sel_layout.addWidget(btn_sel_all)
@@ -244,21 +244,31 @@ class ManualSorterPage(QWidget):
 
         self.splitter.addWidget(left_widget)
 
-        # --- Right Pane ---
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(5, 0, 0, 0)
+        # =========================================
+        # 中央ペイン: 移動先フォルダツリー
+        # =========================================
+        mid_widget = QWidget()
+        mid_widget.setMinimumWidth(220)
+        mid_layout = QVBoxLayout(mid_widget)
+        mid_layout.setContentsMargins(4, 8, 4, 8)
+        mid_layout.setSpacing(6)
 
-        # ルート変更ボタン
         tree_header_layout = QHBoxLayout()
-        tree_header_layout.addWidget(QLabel("移動先フォルダ:"))
+        tree_label = QLabel("移動先フォルダ")
+        tree_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        tree_header_layout.addWidget(tree_label)
         tree_header_layout.addStretch()
+
         btn_change_root = QPushButton("📂 ルート変更")
-        btn_change_root.setFixedHeight(24)
-        btn_change_root.setStyleSheet("font-size: 11px; padding: 0 8px;")
+        btn_change_root.setFixedHeight(26)
+        btn_change_root.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_change_root.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 8px; background-color: #333; "
+            "color: #ccc; border: 1px solid #555; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #444; }")
         btn_change_root.clicked.connect(self.change_tree_root)
         tree_header_layout.addWidget(btn_change_root)
-        right_layout.addLayout(tree_header_layout)
+        mid_layout.addLayout(tree_header_layout)
 
         self.fs_model = QFileSystemModel()
         self.fs_model.setRootPath(QDir.rootPath())
@@ -266,74 +276,94 @@ class ManualSorterPage(QWidget):
 
         self.tree_target = QTreeView()
         self.tree_target.setModel(self.fs_model)
-        self.tree_target.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3e3e42;")
-        self.tree_target.setColumnWidth(0, 250)
-        for i in range(1, 4): self.tree_target.hideColumn(i)
-
-        # 初期ルート: ホーム
+        self.tree_target.setStyleSheet(
+            "QTreeView { background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 4px; outline: none; }"
+            "QTreeView::item { padding: 3px 0; }"
+            "QTreeView::item:selected { background-color: #007acc; }")
+        self.tree_target.setHeaderHidden(True)
+        for i in range(1, 4):
+            self.tree_target.hideColumn(i)
         self.tree_target.setRootIndex(self.fs_model.index(QDir.homePath()))
-
         self.tree_target.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree_target.customContextMenuRequested.connect(self.show_tree_context_menu)
-        right_layout.addWidget(self.tree_target)
+        mid_layout.addWidget(self.tree_target, 1)
 
         btn_mkdir = QPushButton("📂 新規フォルダ作成")
+        btn_mkdir.setFixedHeight(30)
+        btn_mkdir.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_mkdir.setStyleSheet(
+            "QPushButton { background-color: #333; color: #ccc; border: 1px solid #555; "
+            "border-radius: 4px; font-size: 12px; }"
+            "QPushButton:hover { background-color: #444; }")
         btn_mkdir.clicked.connect(self.create_new_folder_action)
-        right_layout.addWidget(btn_mkdir)
+        mid_layout.addWidget(btn_mkdir)
 
-        self.splitter.addWidget(right_widget)
+        self.splitter.addWidget(mid_widget)
 
-        # --- Preview Pane (Far Right) ---
-        preview_panel = QFrame()
-        preview_panel.setFrameShape(QFrame.Shape.StyledPanel)
+        # =========================================
+        # 右ペイン: プレビュー
+        # =========================================
+        self.preview_panel = preview_panel = QFrame()
+        preview_panel.setMinimumWidth(200)
+        preview_panel.setMaximumWidth(450)
         preview_panel.setStyleSheet("background-color: #252526; border-left: 1px solid #3e3e42;")
         preview_layout = QVBoxLayout(preview_panel)
-        preview_layout.setContentsMargins(15, 15, 15, 15)
-        preview_layout.setSpacing(15)
-        
+        preview_layout.setContentsMargins(12, 12, 12, 12)
+        preview_layout.setSpacing(10)
+
         preview_title = QLabel("プレビュー")
-        preview_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fff;")
+        preview_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fff;")
         preview_layout.addWidget(preview_title)
-        
+
         self.preview_image = QLabel("画像を選択してください")
         self.preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_image.setMinimumSize(200, 200)
+        self.preview_image.setMinimumSize(150, 150)
+        self.preview_image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_image.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 4px;")
-        self.preview_image.setScaledContents(True)
-        # 縦横比保持のためにPaintEventなどをいじるのは手間なので、setPixmap時にscaledする方針
-        preview_layout.addWidget(self.preview_image, 1) # Stretch
-        
+        preview_layout.addWidget(self.preview_image)
+
         self.preview_info = QLabel("")
         self.preview_info.setStyleSheet("color: #aaa; font-size: 12px;")
         self.preview_info.setWordWrap(True)
         preview_layout.addWidget(self.preview_info)
-        
+        preview_layout.addStretch()
+
         self.splitter.addWidget(preview_panel)
 
-
-        self.splitter.setStretchFactor(0, 4)
-        self.splitter.setStretchFactor(1, 3)
-        self.splitter.setStretchFactor(2, 3)
+        # スプリッター設定
+        self.splitter.setStretchFactor(0, 3)   # ソース一覧: 伸縮大
+        self.splitter.setStretchFactor(1, 2)   # フォルダツリー: 伸縮中
+        self.splitter.setStretchFactor(2, 0)   # プレビュー: 固定寄り
+        self.splitter.setSizes([450, 350, 300])
         main_layout.addWidget(self.splitter, 1)
 
-        # 3. Action
+        # 3. アクションバー
         action_frame = QFrame()
-        action_frame.setStyleSheet("background-color: #2d2d30; border-top: 1px solid #444;")
+        action_frame.setFixedHeight(56)
+        action_frame.setStyleSheet("background-color: #2d2d30; border-top: 1px solid #3e3e42;")
         action_layout = QHBoxLayout(action_frame)
-        action_layout.setContentsMargins(10, 10, 10, 10)
+        action_layout.setContentsMargins(15, 8, 15, 8)
+        action_layout.setSpacing(12)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedHeight(10)
+        self.progress_bar.setFixedHeight(8)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar { border: none; background-color: #1e1e1e; border-radius: 4px; }
+            QProgressBar::chunk { background-color: #007acc; border-radius: 4px; }
+        """)
 
         self.btn_move = QPushButton("➡ 選択したファイルを移動")
-        self.btn_move.setFixedHeight(40)
-        self.btn_move.setFixedWidth(250)
+        self.btn_move.setFixedHeight(36)
+        self.btn_move.setMinimumWidth(220)
+        self.btn_move.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_move.setStyleSheet("""
-            QPushButton { background-color: #007acc; color: white; font-weight: bold; font-size: 14px; border-radius: 4px; }
+            QPushButton { background-color: #007acc; color: white; font-weight: bold;
+                          font-size: 13px; border-radius: 4px; padding: 0 20px; }
             QPushButton:hover { background-color: #0099ff; }
             QPushButton:pressed { background-color: #005a9e; }
+            QPushButton:disabled { background-color: #444; color: #888; }
         """)
         self.btn_move.clicked.connect(self.start_move_process)
 
@@ -402,23 +432,13 @@ class ManualSorterPage(QWidget):
             item.setToolTip(path)
             item.setData(Qt.ItemDataRole.UserRole, {'id': fid, 'path': path})
 
-            pix = get_db_thumbnail(self.db, fid, path, 140)
+            pix = get_thumbnail(self.db, fid, path, 140)
             item.setIcon(QIcon(pix))
 
             self.list_source.addItem(item)
 
     def get_file_id(self, path):
-        try:
-            import sqlite3
-            with self.db.lock:
-                row = self.db.conn.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
-                return row[0] if row else 0
-        except sqlite3.Error as e:
-            logger.error(f"Database error in get_file_id: {e}")
-            return 0
-        except Exception as e:
-            logger.error(f"Unexpected error in get_file_id: {e}", exc_info=True)
-            return 0
+        return self.db.get_file_id_by_path(path)
 
     def update_selection_count(self):
         count = len(self.list_source.selectedItems())
@@ -450,16 +470,20 @@ class ManualSorterPage(QWidget):
             self.preview_image.setText("画像を選択してください")
             self.preview_info.setText("")
             return
-            
         path = data['path']
-        fid = data.get('id', 0)
-        
-        # Determine preview size based on widget size? Fixed 400px for now
-        pix = get_db_thumbnail(self.db, fid, path, 400)
-        if pix:
-            self.preview_image.setPixmap(pix)
-        else:
-             self.preview_image.setText("プレビュー不可")
+        pix = get_preview(path)
+        # プレビューパネルの幅に合わせる（親パネルを参照し縮小ループを防止）
+        panel_w = self.preview_panel.width() - 30
+        if panel_w < 100:
+            panel_w = DEFAULT_PREVIEW_MAX_WIDTH
+        apply_preview_to_label(
+            self.preview_image, pix,
+            max_width=panel_w,
+            max_height=DEFAULT_PREVIEW_MAX_HEIGHT,
+            style_sheet="background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 4px;",
+        )
+        if pix.isNull():
+            self.preview_image.setText("プレビュー不可")
 
         # Info
         file_info = get_file_info(path)

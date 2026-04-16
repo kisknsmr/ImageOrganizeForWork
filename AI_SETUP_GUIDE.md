@@ -15,7 +15,7 @@
    - AI機能を使用してモデルを自動ダウンロード
    - モデルは `~/.cache/huggingface/` に保存されます
 
-2. **config.pyを編集**
+2. **src/config.pyを編集**
    ```python
    # AIモデル設定
    HF_OFFLINE_MODE: bool = True  # オフラインモードを有効化
@@ -30,7 +30,7 @@
 
 #### 手順
 
-1. **config.pyを編集**
+1. **src/config.pyを編集**
    ```python
    # AIモデル設定
    HF_MIRROR_SITE: str = "https://hf-mirror.com"  # ミラーサイトURL
@@ -45,7 +45,7 @@
 
 #### 手順
 
-1. **config.pyを編集**
+1. **src/config.pyを編集**
    ```python
    # AIモデル設定
    HF_MODEL_CACHE_DIR: str = "C:/models/huggingface"  # カスタムパス
@@ -81,7 +81,7 @@ processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 ```
 
-ダウンロード後、`config.py`で`HF_OFFLINE_MODE = True`に設定してください。
+ダウンロード後、`src/config.py`で`HF_OFFLINE_MODE = True`に設定してください。
 
 ## トラブルシューティング
 

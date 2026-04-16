@@ -7,13 +7,21 @@ import os
 import logging
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                              QFileDialog, QFrame, QScrollArea, QProgressBar,
-                             QMessageBox, QCheckBox, QSpinBox, QSplitter)
+                             QMessageBox, QCheckBox, QSpinBox, QSplitter, QSizePolicy)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import get_db_thumbnail, setup_logging, DatabaseManager, get_file_info, format_file_size
-from config import config
+
+from src.core import setup_logging, get_file_info, format_file_size
+from src.database import DatabaseManager
+from gui.thumbnail_preview import (
+    get_preview,
+    apply_preview_to_label,
+    open_file_in_viewer,
+    DEFAULT_PREVIEW_MAX_WIDTH,
+    DEFAULT_PREVIEW_MAX_HEIGHT,
+)
+from src.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +51,7 @@ class SmallFileScanner(QThread):
         
         try:
             # データベースから全ファイルを取得
-            with self.db.lock:
-                rows = self.db.conn.execute(
-                    "SELECT id, path, size FROM files WHERE status != 'trash'"
-                ).fetchall()
+            rows = self.db.get_non_trash_files_raw()
             
             total = len(rows)
             if total == 0:
@@ -108,161 +113,253 @@ class SmallFileCleanerPage(QWidget):
 
     def init_ui(self):
         self.setStyleSheet("""
-            QWidget { background-color: #1e1e1e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
-            QLabel { font-size: 13px; }
-            QPushButton {
-                background-color: #2d2d30; border: 1px solid #3e3e42; color: #e0e0e0;
-                padding: 8px; border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #3e3e42; border-color: #007acc; }
-            QPushButton:disabled { background-color: #1a1a1a; color: #666; }
+            QWidget { background-color: #1e1e1e; color: #e0e0e0; }
+            QSplitter::handle { background-color: #3e3e42; }
+            QSplitter::handle:horizontal { width: 3px; }
         """)
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
+        # =========================================
         # ヘッダー
-        header = QHBoxLayout()
-        title = QLabel("🗑️ 小さいファイル削除")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #fff;")
-        header.addWidget(title)
-        header.addStretch()
-        main_layout.addLayout(header)
+        # =========================================
+        header_frame = QFrame()
+        header_frame.setMinimumHeight(48)
+        header_frame.setStyleSheet("background-color: #2d2d30; border-bottom: 1px solid #3e3e42;")
+        header_layout = QHBoxLayout(header_frame)
+        header_layout.setContentsMargins(15, 6, 15, 6)
+        title = QLabel("🗑️ 極小ファイル削除（ステップ③）")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #fff;")
+        header_layout.addWidget(title)
+        hint = QLabel("②ピンボケの次。サムネ級の不要ファイルを除きます")
+        hint.setStyleSheet("font-size: 11px; color: #888;")
+        header_layout.addWidget(hint)
+        header_layout.addStretch()
+        main_layout.addWidget(header_frame)
 
-        # 設定エリア
+        # =========================================
+        # 設定エリア（コンパクト）
+        # =========================================
         settings_frame = QFrame()
-        settings_frame.setStyleSheet("background-color: #252526; border-radius: 6px; padding: 15px;")
+        settings_frame.setStyleSheet("background-color: #252526; border-bottom: 1px solid #3e3e42;")
         settings_layout = QVBoxLayout(settings_frame)
-        settings_layout.setSpacing(10)
+        settings_layout.setContentsMargins(15, 10, 15, 10)
+        settings_layout.setSpacing(8)
 
-        settings_layout.addWidget(QLabel("削除条件設定"))
+        # 条件設定行
+        cond_row = QHBoxLayout()
+        cond_row.setSpacing(15)
 
-        # ファイルサイズ設定
-        size_layout = QHBoxLayout()
-        size_layout.addWidget(QLabel("最小ファイルサイズ:"))
+        lbl_size = QLabel("最小ファイルサイズ:")
+        lbl_size.setStyleSheet("font-size: 12px;")
+        cond_row.addWidget(lbl_size)
+        spin_style = """
+            QSpinBox {
+                background-color: #1e1e1e; border: 1px solid #3e3e42;
+                border-radius: 3px; padding: 2px 4px; color: #e0e0e0;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                subcontrol-origin: border; width: 18px;
+                background-color: #2d2d30; border: 1px solid #3e3e42;
+            }
+            QSpinBox::up-button { subcontrol-position: top right; border-top-right-radius: 3px; }
+            QSpinBox::down-button { subcontrol-position: bottom right; border-bottom-right-radius: 3px; }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover { background-color: #444; }
+            QSpinBox::up-arrow { image: none; border-left: 4px solid transparent;
+                border-right: 4px solid transparent; border-bottom: 5px solid #ccc;
+                width: 0; height: 0; }
+            QSpinBox::down-arrow { image: none; border-left: 4px solid transparent;
+                border-right: 4px solid transparent; border-top: 5px solid #ccc;
+                width: 0; height: 0; }
+        """
+
         self.size_spin = QSpinBox()
-        self.size_spin.setRange(1, 10000)  # KB単位
+        self.size_spin.setRange(1, 10000)
         self.size_spin.setValue(config.MIN_FILE_SIZE_THRESHOLD // 1024)
         self.size_spin.setSuffix(" KB")
-        size_layout.addWidget(self.size_spin)
-        size_layout.addStretch()
-        settings_layout.addLayout(size_layout)
+        self.size_spin.setFixedWidth(110)
+        self.size_spin.setFixedHeight(28)
+        self.size_spin.setStyleSheet(spin_style)
+        cond_row.addWidget(self.size_spin)
 
-        # 画像サイズ設定
-        image_size_layout = QHBoxLayout()
-        image_size_layout.addWidget(QLabel("最小画像サイズ:"))
+        cond_row.addSpacing(20)
+
+        lbl_img = QLabel("最小画像サイズ:")
+        lbl_img.setStyleSheet("font-size: 12px;")
+        cond_row.addWidget(lbl_img)
         self.width_spin = QSpinBox()
         self.width_spin.setRange(10, 1000)
         self.width_spin.setValue(config.MIN_IMAGE_SIZE_THRESHOLD[0])
         self.width_spin.setSuffix(" px")
-        image_size_layout.addWidget(self.width_spin)
-        image_size_layout.addWidget(QLabel("×"))
+        self.width_spin.setFixedWidth(100)
+        self.width_spin.setFixedHeight(28)
+        self.width_spin.setStyleSheet(spin_style)
+        cond_row.addWidget(self.width_spin)
+        lbl_x = QLabel("×")
+        lbl_x.setStyleSheet("font-size: 12px;")
+        cond_row.addWidget(lbl_x)
         self.height_spin = QSpinBox()
         self.height_spin.setRange(10, 1000)
         self.height_spin.setValue(config.MIN_IMAGE_SIZE_THRESHOLD[1])
         self.height_spin.setSuffix(" px")
-        image_size_layout.addWidget(self.height_spin)
-        image_size_layout.addStretch()
-        settings_layout.addLayout(image_size_layout)
+        self.height_spin.setFixedWidth(100)
+        self.height_spin.setFixedHeight(28)
+        self.height_spin.setStyleSheet(spin_style)
+        cond_row.addWidget(self.height_spin)
 
-        # スキャンボタン
-        btn_layout = QHBoxLayout()
+        cond_row.addStretch()
+
         self.btn_scan = QPushButton("🔍 スキャン開始")
-        self.btn_scan.setStyleSheet("background-color: #007acc; color: white; font-weight: bold; padding: 10px;")
+        self.btn_scan.setFixedHeight(30)
+        self.btn_scan.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_scan.setStyleSheet(
+            "QPushButton { background-color: #007acc; color: white; font-weight: bold; "
+            "border-radius: 4px; padding: 0 16px; font-size: 12px; }"
+            "QPushButton:hover { background-color: #0099ff; }"
+            "QPushButton:disabled { background-color: #444; color: #888; }")
         self.btn_scan.clicked.connect(self.start_scan)
-        btn_layout.addWidget(self.btn_scan)
-        
+        cond_row.addWidget(self.btn_scan)
+
         self.btn_stop = QPushButton("⏹ 停止")
-        self.btn_stop.setStyleSheet("background-color: #d83b01; color: white; padding: 10px;")
+        self.btn_stop.setFixedHeight(30)
+        self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_stop.setStyleSheet(
+            "QPushButton { background-color: #d83b01; color: white; "
+            "border-radius: 4px; padding: 0 16px; font-size: 12px; }"
+            "QPushButton:hover { background-color: #e84c1a; }"
+            "QPushButton:disabled { background-color: #444; color: #888; }")
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.stop_scan)
-        btn_layout.addWidget(self.btn_stop)
-        
-        settings_layout.addLayout(btn_layout)
+        cond_row.addWidget(self.btn_stop)
 
-        # プログレスバー
+        settings_layout.addLayout(cond_row)
+
+        # プログレス + ステータス行
+        prog_row = QHBoxLayout()
+        prog_row.setSpacing(10)
         self.progress = QProgressBar()
-        self.progress.setTextVisible(True)
-        settings_layout.addWidget(self.progress)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(8)
+        self.progress.setStyleSheet("""
+            QProgressBar { border: none; background-color: #1e1e1e; border-radius: 4px; }
+            QProgressBar::chunk { background-color: #007acc; border-radius: 4px; }
+        """)
+        prog_row.addWidget(self.progress, 1)
 
-        # ステータスラベル
         self.status_label = QLabel("準備完了")
-        self.status_label.setStyleSheet("color: #aaa; font-size: 11px;")
-        settings_layout.addWidget(self.status_label)
+        self.status_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.status_label.setMinimumWidth(180)
+        prog_row.addWidget(self.status_label)
+        settings_layout.addLayout(prog_row)
 
         main_layout.addWidget(settings_frame)
 
-        # 結果エリア（スプリッター）
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        
-        # 左側: ファイルリスト
-        list_panel = QFrame()
-        list_panel.setStyleSheet("background-color: #252526; border-radius: 6px;")
-        list_layout = QVBoxLayout(list_panel)
-        list_layout.setContentsMargins(10, 10, 10, 10)
-        list_layout.setSpacing(10)
+        # =========================================
+        # メインコンテンツ（スプリッター）
+        # =========================================
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        list_layout.addWidget(QLabel("検出されたファイル"))
-        
+        # --- 左: ファイルリスト ---
+        list_panel = QWidget()
+        list_panel.setMinimumWidth(350)
+        list_layout = QVBoxLayout(list_panel)
+        list_layout.setContentsMargins(8, 8, 4, 8)
+        list_layout.setSpacing(6)
+
+        list_header = QLabel("検出されたファイル")
+        list_header.setStyleSheet("font-weight: bold; font-size: 13px;")
+        list_layout.addWidget(list_header)
+
         self.file_list_area = QScrollArea()
         self.file_list_area.setWidgetResizable(True)
+        self.file_list_area.setStyleSheet(
+            "QScrollArea { background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 4px; }")
         self.file_list_container = QWidget()
         self.file_list_layout = QVBoxLayout(self.file_list_container)
+        self.file_list_layout.setContentsMargins(4, 4, 4, 4)
+        self.file_list_layout.setSpacing(4)
         self.file_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.file_list_area.setWidget(self.file_list_container)
-        list_layout.addWidget(self.file_list_area)
+        list_layout.addWidget(self.file_list_area, 1)
 
-        # 選択操作ボタン
+        # 選択操作バー
         select_layout = QHBoxLayout()
+        select_layout.setContentsMargins(0, 0, 0, 0)
+
         btn_select_all = QPushButton("全選択")
+        btn_select_all.setFixedHeight(28)
+        btn_select_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_select_all.setStyleSheet(
+            "QPushButton { background-color: #333; color: #ccc; border: 1px solid #555; "
+            "border-radius: 4px; padding: 2px 12px; font-size: 11px; }"
+            "QPushButton:hover { background-color: #444; }")
         btn_select_all.clicked.connect(self.select_all)
         select_layout.addWidget(btn_select_all)
-        
+
         btn_deselect_all = QPushButton("全解除")
+        btn_deselect_all.setFixedHeight(28)
+        btn_deselect_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_deselect_all.setStyleSheet(
+            "QPushButton { background-color: #333; color: #ccc; border: 1px solid #555; "
+            "border-radius: 4px; padding: 2px 12px; font-size: 11px; }"
+            "QPushButton:hover { background-color: #444; }")
         btn_deselect_all.clicked.connect(self.deselect_all)
         select_layout.addWidget(btn_deselect_all)
-        
+
         select_layout.addStretch()
-        
+
         self.btn_delete = QPushButton("🗑️ 選択したファイルを削除")
-        self.btn_delete.setStyleSheet("background-color: #d83b01; color: white; font-weight: bold; padding: 10px;")
+        self.btn_delete.setFixedHeight(32)
+        self.btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_delete.setStyleSheet(
+            "QPushButton { background-color: #d83b01; color: white; font-weight: bold; "
+            "border-radius: 4px; padding: 0 16px; font-size: 12px; }"
+            "QPushButton:hover { background-color: #e84c1a; }"
+            "QPushButton:disabled { background-color: #444; color: #888; }")
         self.btn_delete.setEnabled(False)
         self.btn_delete.clicked.connect(self.delete_selected)
         select_layout.addWidget(self.btn_delete)
-        
+
         list_layout.addLayout(select_layout)
 
-        # 右側: プレビュー
-        preview_panel = QFrame()
-        preview_panel.setFixedWidth(350)
-        preview_panel.setStyleSheet("background-color: #252526; border-radius: 6px;")
-        preview_layout = QVBoxLayout(preview_panel)
-        preview_layout.setContentsMargins(15, 15, 15, 15)
-        preview_layout.setSpacing(15)
+        self.splitter.addWidget(list_panel)
 
-        preview_layout.addWidget(QLabel("プレビュー"))
+        # --- 右: プレビュー ---
+        self.preview_panel = preview_panel = QFrame()
+        preview_panel.setMinimumWidth(200)
+        preview_panel.setMaximumWidth(450)
+        preview_panel.setStyleSheet("background-color: #252526; border-left: 1px solid #3e3e42;")
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(12, 12, 12, 12)
+        preview_layout.setSpacing(10)
+
+        preview_title = QLabel("プレビュー")
+        preview_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fff;")
+        preview_layout.addWidget(preview_title)
 
         self.preview_image = QLabel("ファイルを選択してください")
         self.preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_image.setFixedSize(320, 320)
+        self.preview_image.setMinimumSize(150, 150)
+        self.preview_image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_image.setStyleSheet("background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 4px;")
-        self.preview_image.setScaledContents(True)
         preview_layout.addWidget(self.preview_image)
 
         self.preview_info = QLabel("")
         self.preview_info.setStyleSheet("color: #aaa; font-size: 12px;")
         self.preview_info.setWordWrap(True)
         preview_layout.addWidget(self.preview_info)
-
         preview_layout.addStretch()
 
-        splitter.addWidget(list_panel)
-        splitter.addWidget(preview_panel)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
+        self.splitter.addWidget(preview_panel)
 
-        main_layout.addWidget(splitter)
+        # スプリッター設定
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setSizes([600, 300])
+
+        main_layout.addWidget(self.splitter, 1)
 
     def start_scan(self):
         """スキャンを開始"""
@@ -346,10 +443,12 @@ class SmallFileCleanerPage(QWidget):
 
         layout.addLayout(info_layout, stretch=1)
 
-        # クリックでプレビュー
+        # クリックでプレビュー、ダブルクリックでビューアー
         def show_preview():
             self.show_file_preview(file_data)
         frame.mousePressEvent = lambda e: show_preview() if e.button() == Qt.MouseButton.LeftButton else None
+        frame.mouseDoubleClickEvent = lambda e: open_file_in_viewer(file_data['path'])
+        frame.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.file_list_layout.addWidget(frame)
 
@@ -380,10 +479,19 @@ class SmallFileCleanerPage(QWidget):
                     checkbox.setChecked(False)
 
     def show_file_preview(self, file_data):
-        """ファイルプレビューを表示"""
-        # 画像を表示
-        pix = get_db_thumbnail(self.db, file_data['id'], file_data['path'], 300)
-        self.preview_image.setPixmap(pix)
+        """ファイルプレビューを表示（共通API・縦横比保持）"""
+        pix = get_preview(file_data['path'])
+        panel_w = self.preview_panel.width() - 30  # パネル幅からマージン分を引く
+        if panel_w < 100:
+            panel_w = DEFAULT_PREVIEW_MAX_WIDTH
+        apply_preview_to_label(
+            self.preview_image, pix,
+            max_width=panel_w,
+            max_height=DEFAULT_PREVIEW_MAX_HEIGHT,
+            style_sheet="background-color: #1e1e1e; border: 1px solid #3e3e42; border-radius: 4px;",
+        )
+        if pix.isNull():
+            self.preview_image.setText("プレビュー不可")
 
         # 情報を表示
         info_lines = []
@@ -411,6 +519,7 @@ class SmallFileCleanerPage(QWidget):
 
         if reply == QMessageBox.StandardButton.Yes:
             deleted_count = 0
+            failed_count = 0
             for file_data in self.found_files:
                 if file_data['id'] in self.selected_files:
                     if self.db.move_to_trash(file_data['id']):
@@ -424,8 +533,14 @@ class SmallFileCleanerPage(QWidget):
                                 if checkbox and file_data['id'] in [f['id'] for f in self.found_files if f['id'] == file_data['id']]:
                                     widget.deleteLater()
                                     break
+                    else:
+                        failed_count += 1
 
-            QMessageBox.information(self, "完了", f"{deleted_count} 個のファイルを削除しました")
+            if failed_count > 0:
+                QMessageBox.warning(self, "削除失敗",
+                                    f"{deleted_count} 個を削除しましたが、{failed_count} 個の削除に失敗しました。\nログを確認してください。")
+            else:
+                QMessageBox.information(self, "完了", f"{deleted_count} 個のファイルを削除しました")
             
             # リストを更新
             self.found_files = [f for f in self.found_files if f['id'] not in self.selected_files]

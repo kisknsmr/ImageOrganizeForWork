@@ -1,0 +1,13 @@
+# PhotoSortX — コア依存（pyproject.toml と整合）
+# Python 3.10 以上が必要です。
+imagehash>=4.3
+numpy>=2.0
+opencv-python>=4.9
+Pillow>=12.0
+PyQt6>=6.6
+scikit-learn>=1.5
+
+# --- AI（スマート整理 / CLIP）— 任意 ---
+#   pip install "torch>=2.2" "transformers>=4.37"
+# またはリポジトリ直下で: pip install -e ".[ai]"
+# （pyproject.toml の optional-dependencies.ai と同内容）

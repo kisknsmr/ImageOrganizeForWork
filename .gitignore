@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE / agent
+.idea/
+.cursor/
+.claude/
+.vscode/
+*.swp
+*.swo
+
+# Runtime / generated
+photos.db
+photos.db-shm
+photos.db-wal
+debug.log
+debug.log.*
+*.log
+
+# OS
+Thumbs.db
+.DS_Store

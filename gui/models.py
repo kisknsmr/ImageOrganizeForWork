@@ -1,7 +1,7 @@
 from PyQt6.QtCore import QAbstractListModel, QSize, QThreadPool, QModelIndex, Qt
 from PyQt6.QtGui import QColor
 
-from core import ImageLoader
+from src.core import ImageLoader
 
 class PhotoModel(QAbstractListModel):
     def __init__(self, db_manager, icon_size=None):
