@@ -30,3 +30,8 @@ debug.log.*
 # OS
 Thumbs.db
 .DS_Store
+
+# Tauri / frontend build artifacts
+app/node_modules/
+app/dist/
+app/src-tauri/target/
