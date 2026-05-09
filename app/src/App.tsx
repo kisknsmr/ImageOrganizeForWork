@@ -23,7 +23,8 @@ function AnimatedRoutes() {
       <Routes location={location}>
         <Route path="/" element={<HomePage />} />
         <Route path="/gallery" element={<GalleryPage />} />
-        <Route path="/import" element={<ImportPage />} />
+        <Route path="/import" element={<Navigate to="/" replace />} />
+        <Route path="/cleanup" element={<Navigate to="/" replace />} />
         <Route path="/triage" element={<TriagePage />} />
         <Route path="/duplicates" element={<DuplicatesPage />} />
         <Route path="/blurry" element={<BlurryPage />} />
@@ -31,7 +32,6 @@ function AnimatedRoutes() {
         <Route path="/similar" element={<SimilarPage />} />
         <Route path="/manual" element={<ManualSortPage />} />
         <Route path="/ai-organize" element={<AiOrganizePage />} />
-        <Route path="/cleanup" element={<CleanupPage />} />
         <Route path="/trash" element={<TrashPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

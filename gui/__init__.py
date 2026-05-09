@@ -1,1 +1,0 @@
-"""PhotoSortX GUI コンポーネント。"""

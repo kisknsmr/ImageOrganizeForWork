@@ -2,8 +2,7 @@
 コア機能のユニットテスト
 
 軽量関数（format_eta 等）は src.utils から直接インポートし、
-cv2 / PyQt 等の重い依存なしでテスト可能にしている。
-cv2 / PyQt を必要とするテストは HAS_CORE フラグでスキップする。
+追加のネイティブ依存なしでテスト可能にしている。
 """
 import unittest
 import os
@@ -19,23 +18,11 @@ from src.utils import format_eta, hamming_dist, format_file_size, format_file_si
 from src.config import config
 from src.database import DatabaseManager
 
-# --- 重い依存（cv2 / PyQt）が必要なモジュール ---
-HAS_CORE = False
-try:
-    from src.core import (
-        setup_logging,
-        get_capture_time,
-        get_file_info,
-        ScannerThread,
-        AnalyzerThread,
-    )
-    HAS_CORE = True
-except ImportError:
-    pass
+from src.core import get_capture_time, get_file_info, setup_logging
 
 
 class TestUtilFunctions(unittest.TestCase):
-    """cv2 / PyQt 不要の軽量関数テスト"""
+    """軽量ユーティリティのテスト"""
 
     def test_format_eta(self):
         """ETAフォーマットのテスト"""
@@ -66,9 +53,8 @@ class TestUtilFunctions(unittest.TestCase):
         self.assertEqual(format_file_size_kb(-1), "不明")
 
 
-@unittest.skipUnless(HAS_CORE, "cv2 / PyQt が必要（環境によってはスキップ）")
 class TestCoreFunctions(unittest.TestCase):
-    """cv2 / PyQt を使うコア関数のテスト"""
+    """src.core のファイル情報・時刻取得テスト"""
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()

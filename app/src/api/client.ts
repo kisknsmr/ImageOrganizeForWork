@@ -20,6 +20,8 @@ export const api = {
     request<ScanJob>('/api/scan/start', { method: 'POST', body: JSON.stringify({ root_path: rootPath }) }),
   scanStatus: () => request<ScanJob>('/api/scan/status'),
   analyzeStart: () => request<{ started: boolean; message?: string; job: ScanJob }>('/api/analyze/start', { method: 'POST' }),
+  analyzeFullHashStart: () =>
+    request<{ started: boolean; message?: string; job: ScanJob }>('/api/analyze/full-hash/start', { method: 'POST' }),
   files: (params: URLSearchParams) => request<PagedFiles>(`/api/files?${params.toString()}`),
   triage: (id: number, action: 'keep' | 'discard' | 'skip' | null) =>
     request(`/api/files/${id}/triage`, { method: 'POST', body: JSON.stringify({ action }) }),
@@ -39,6 +41,15 @@ export const api = {
     request<{ ok: boolean; moved: number; failed_ids: number[] }>('/api/files/batch-move', {
       method: 'POST',
       body: JSON.stringify({ file_ids: fileIds, destination_folder: destinationFolder }),
+    }),
+  tinyFiles: (maxSize = 50 * 1024) =>
+    request<{ items: FileItem[]; max_size: number }>(`/api/tiny?max_size=${maxSize}`),
+  getSettings: () =>
+    request<Record<string, string | null>>('/api/settings'),
+  saveSetting: (key: string, value: string) =>
+    request<{ ok: boolean }>('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ key, value }),
     }),
   folders: () => request<{ folders: string[] }>('/api/folders'),
   createFolder: (path: string) =>

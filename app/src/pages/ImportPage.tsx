@@ -61,10 +61,15 @@ export function ImportPage() {
       <div className="toolbar">
         <div className="toolbar-group">
           <span className="status-chip">
-            <span className="status-dot" />
+            <span className="status-dot" style={{ background: status.data?.running ? 'var(--success)' : 'var(--text-muted)' }} />
             {status.data?.running ? 'Running' : 'Idle'}
           </span>
-          <span className="muted">{status.data?.percent ?? 0}%</span>
+          {status.data?.running && (
+            <span className="muted">{status.data.percent ?? 0}%</span>
+          )}
+          {!status.data?.running && (status.data?.percent ?? 0) === 100 && (
+            <span className="muted" style={{ fontSize: 12 }}>前回完了</span>
+          )}
         </div>
       </div>
       <article className="card">

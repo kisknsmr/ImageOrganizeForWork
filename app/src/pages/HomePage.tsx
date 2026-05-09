@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { CleanupSummaryPanel } from '../components/CleanupSummaryPanel'
+import { ImportAnalyzePanel } from '../components/ImportAnalyzePanel'
 import { QueryState } from '../components/QueryState'
 
 export function HomePage() {
@@ -10,54 +12,62 @@ export function HomePage() {
   return (
     <section className="page">
       <header className="page-header">
-        <h2>PhotoSortX Dashboard</h2>
-        <p className="page-subtitle">既存PyQt版の機能を維持しながら、Tauri版へ段階移行しています。</p>
+        <h2>Dashboard</h2>
+        <p className="page-subtitle">ライブラリの概要・取込・解析・整理サマリーをひとまとめに確認できます。</p>
       </header>
-      <QueryState
-        isLoading={stats.isPending || health.isPending}
-        isError={hasError}
-        error={stats.error ?? health.error}
-        isEmpty={false}
-        loadingMessage="ダッシュボードを読み込み中..."
-      />
-      {!stats.isPending && !health.isPending && !hasError && (
-        <>
-          <div className="card-grid">
-            <article className="card">
-              <h3>API Status</h3>
-              <p>{health.data?.ok ? 'Online' : 'Offline'}</p>
-              <small className="muted">version: {health.data?.version ?? '-'}</small>
+
+      {/* KPI カード */}
+      <section className="dashboard-section">
+        <h3 className="section-title">Library Overview</h3>
+        <QueryState
+          isLoading={stats.isPending || health.isPending}
+          isError={hasError}
+          error={stats.error ?? health.error}
+          isEmpty={false}
+          loadingMessage="ダッシュボードを読み込み中..."
+        />
+        {!stats.isPending && !health.isPending && !hasError && (
+          <div className="card-grid card-grid--tiles">
+            <article className="card card-tile">
+              <p className="kpi-label muted">API Status</p>
+              <p className="stat-value" style={{ fontSize: 22, color: health.data?.ok ? 'var(--success)' : 'var(--danger)' }}>
+                {health.data?.ok ? 'Online' : 'Offline'}
+              </p>
+              <small className="muted">v{health.data?.version ?? '-'}</small>
             </article>
-            <article className="card">
-              <h3>Total Files</h3>
-              <p>{stats.data?.total ?? 0}</p>
+            <article className="card card-tile">
+              <p className="kpi-label muted">Total Files</p>
+              <p className="stat-value">{stats.data?.total ?? 0}</p>
             </article>
-            <article className="card">
-              <h3>Analyzed</h3>
-              <p>{stats.data?.analyzed ?? 0}</p>
+            <article className="card card-tile">
+              <p className="kpi-label muted">Analyzed</p>
+              <p className="stat-value">{stats.data?.analyzed ?? 0}</p>
             </article>
-            <article className="card">
-              <h3>Triaged</h3>
-              <p>{stats.data?.triaged ?? 0}</p>
+            <article className="card card-tile">
+              <p className="kpi-label muted">In Trash</p>
+              <p className="stat-value">{stats.data?.trashed ?? 0}</p>
+            </article>
+            <article className="card card-tile" style={{ gridColumn: 'span 2' }}>
+              <p className="kpi-label muted">Root Path</p>
+              <p className="mono" style={{ marginTop: 6, fontSize: 13 }}>{stats.data?.root_path ?? '未設定'}</p>
+            </article>
+            <article className="card card-tile">
+              <p className="kpi-label muted">Unprocessed</p>
+              <p className="stat-value">{stats.data?.unprocessed ?? 0}</p>
+            </article>
+            <article className="card card-tile">
+              <p className="kpi-label muted">Triaged</p>
+              <p className="stat-value">{stats.data?.triaged ?? 0}</p>
             </article>
           </div>
-          <div className="card-grid">
-            <article className="card">
-              <h3>Unprocessed</h3>
-              <p>{stats.data?.unprocessed ?? 0}</p>
-            </article>
-            <article className="card">
-              <h3>In Trash</h3>
-              <p>{stats.data?.trashed ?? 0}</p>
-            </article>
-            <article className="card wide">
-              <h3>Root Path</h3>
-              <p className="mono">{stats.data?.root_path ?? '未設定'}</p>
-            </article>
-          </div>
-        </>
-      )}
+        )}
+      </section>
+
+      {/* Import & Analyze */}
+      <ImportAnalyzePanel />
+
+      {/* Clean Up Summary */}
+      <CleanupSummaryPanel />
     </section>
   )
 }
-

@@ -17,12 +17,13 @@ from typing import Literal, Optional
 
 import cv2
 from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from PIL import Image, ImageOps
 
 from .config import config
 from .database import DatabaseManager
-from .services.scan_analyze_service import run_analyze, run_scan
+from .services.scan_analyze_service import run_analyze, run_full_hash, run_scan
 from .utils import hamming_dist
 
 
@@ -127,6 +128,13 @@ db = DatabaseManager()
 jobs = JobManager()
 app = FastAPI(title="PhotoSortX API", version="3.0.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:1420", "http://127.0.0.1:1420", "tauri://localhost"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 def _run_scanner(root_path: str) -> None:
     run_scan(db, root_path=root_path, status_cb=jobs.set_status, percent_cb=jobs.set_percent)
@@ -134,6 +142,10 @@ def _run_scanner(root_path: str) -> None:
 
 def _run_analyzer() -> None:
     run_analyze(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
+
+
+def _run_full_hash_job() -> None:
+    run_full_hash(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
 
 
 def _image_preview_bytes(path: str, max_size: int = 1920) -> bytes:
@@ -254,6 +266,18 @@ def analyze_start() -> dict:
         return {"started": False, "message": "解析対象のファイルがありません。", "job": jobs.snapshot()}
     try:
         jobs.start("analyze", _run_analyzer)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"started": True, "job": jobs.snapshot()}
+
+
+@app.post("/api/analyze/full-hash/start")
+def full_hash_start() -> dict:
+    pending = db.get_files_needing_full_hash(limit=1)
+    if not pending:
+        return {"started": False, "message": "完全ハッシュの対象がありません。", "job": jobs.snapshot()}
+    try:
+        jobs.start("full_hash", _run_full_hash_job)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"started": True, "job": jobs.snapshot()}
@@ -418,6 +442,30 @@ def create_folder(payload: CreateFolderRequest) -> dict:
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"failed to create folder: {exc}") from exc
     return {"ok": True, "path": path}
+
+
+@app.get("/api/tiny")
+def tiny_files(max_size: int = Query(50 * 1024, ge=1, le=50 * 1024 * 1024)) -> dict:
+    """指定バイト以下のファイル一覧を返す"""
+    rows = db.get_tiny_files(max_size)
+    return {"items": rows, "max_size": max_size}
+
+
+class SaveSettingRequest(BaseModel):
+    key: str = Field(..., min_length=1)
+    value: str
+
+
+@app.get("/api/settings")
+def get_settings() -> dict:
+    keys = ["root_path", "trash_retention_days", "blur_threshold", "similarity_threshold"]
+    return {k: db.get_setting(k) for k in keys}
+
+
+@app.post("/api/settings")
+def save_setting(payload: SaveSettingRequest) -> dict:
+    db.set_setting(payload.key, payload.value)
+    return {"ok": True}
 
 
 @app.get("/api/triage/next")

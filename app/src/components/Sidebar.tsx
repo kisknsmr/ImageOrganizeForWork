@@ -19,33 +19,31 @@ type NavSection = {
 
 const sections: NavSection[] = [
   {
-    title: 'IMPORT',
+    title: 'OVERVIEW',
     items: [
-      { to: '/import', label: 'Import & Analyze', icon: 'import', tooltip: '取込（フル/差分）と解析' },
+      { to: '/', label: 'Dashboard', icon: 'home', tooltip: '概要・取込・解析・整理サマリー', end: true },
     ],
   },
   {
     title: 'LIBRARY',
     items: [
-      { to: '/', label: 'Home', icon: 'home', tooltip: '進捗・メッセージの表示', end: true },
       { to: '/gallery', label: 'Gallery', icon: 'gallery', tooltip: 'ライブラリの一覧表示' },
       { to: '/triage', label: 'Triage', icon: 'manual', tooltip: 'Keep/Discard/Skip でテンポ良く判定' },
     ],
   },
   {
-    title: 'CLEAN UP',
+    title: 'CLEAN UP — 削除',
     items: [
       { to: '/duplicates', label: 'Duplicates', icon: 'duplicate', tooltip: '完全に同じ画像を検出・削除' },
       { to: '/blurry', label: 'Blurry photos', icon: 'blur', tooltip: 'ブレ・撮影ミスを検出・削除' },
       { to: '/tiny', label: 'Tiny files', icon: 'tiny', tooltip: 'サムネサイズ級の不要ファイル除去' },
       { to: '/similar', label: 'Similar groups', icon: 'similar', tooltip: '激似・連写をまとめて確認' },
-      { to: '/manual', label: 'Manual sort', icon: 'manual', tooltip: '残す／捨てる・フォルダ分け' },
-      { to: '/cleanup', label: 'Clean up summary', icon: 'cleanup', tooltip: 'カテゴリごとの集計' },
     ],
   },
   {
-    title: 'SMART',
+    title: 'CLEAN UP — 移動',
     items: [
+      { to: '/manual', label: 'Manual sort', icon: 'manual', tooltip: '残す／捨てる・フォルダ分け' },
       { to: '/ai-organize', label: 'AI organize', icon: 'ai', tooltip: 'CLIPによるスマート整理' },
     ],
   },

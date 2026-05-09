@@ -16,7 +16,7 @@ export function AiOrganizePage() {
       <article className="card">
         <p className="muted">
           CLIPベースの既存スマート整理機能は、Pythonコアを再利用して段階的にTauriへ移行します。
-          現時点ではUI骨格を維持し、既存PyQt版はそのまま使用可能です。
+          イベント単位の整理や CLIP 連携は今後の拡張として計画しています。現時点では UI の骨組みのみです。
         </p>
       </article>
     </section>

@@ -69,6 +69,9 @@ class DatabaseManager:
                 c.execute('CREATE INDEX IF NOT EXISTS idx_full_hash ON files (full_hash)')
                 # ゴミ箱に移した時刻（Unix 秒）。退避期間経過前の完全削除を防ぐ
                 self._migrate_add_column(c, 'files', 'trashed_at', 'REAL')
+                # トリアージステータスとコンテンツタイプ
+                self._migrate_add_column(c, 'files', 'triage_status', 'TEXT')
+                self._migrate_add_column(c, 'files', 'content_type', 'TEXT')
                 self.conn.commit()
             except sqlite3.Error as e:
                 logger.error(f"Failed to initialize database: {e}")
@@ -247,6 +250,174 @@ class DatabaseManager:
         if removed:
             logger.info(f"prune_missing_file_paths: removed {removed} stale row(s)")
         return removed
+
+    def get_library_stats(self) -> dict:
+        """ダッシュボード用の統計情報を返す"""
+        with self.lock:
+            try:
+                total = self.conn.execute("SELECT COUNT(*) FROM files WHERE status != 'trash'").fetchone()[0]
+                analyzed = self.conn.execute("SELECT COUNT(*) FROM files WHERE status IN ('analyzed','sorted') AND status != 'trash'").fetchone()[0]
+                triaged = self.conn.execute("SELECT COUNT(*) FROM files WHERE triage_status IS NOT NULL AND status != 'trash'").fetchone()[0]
+                unprocessed = self.conn.execute("SELECT COUNT(*) FROM files WHERE status = 'unprocessed'").fetchone()[0]
+                trashed = self.conn.execute("SELECT COUNT(*) FROM files WHERE status = 'trash'").fetchone()[0]
+                root_path = self.get_setting("root_path")
+                return {
+                    "total": total,
+                    "analyzed": analyzed,
+                    "triaged": triaged,
+                    "unprocessed": unprocessed,
+                    "trashed": trashed,
+                    "root_path": root_path,
+                }
+            except sqlite3.Error as e:
+                logger.error(f"get_library_stats error: {e}")
+                return {"total": 0, "analyzed": 0, "triaged": 0, "unprocessed": 0, "trashed": 0, "root_path": None}
+
+    def get_file_by_id(self, fid: int) -> Optional[dict]:
+        """IDでファイル情報を辞書形式で取得"""
+        with self.lock:
+            try:
+                row = self.conn.execute(
+                    "SELECT id, path, filename, extension, size, mtime, status, "
+                    "hash_value, p_hash, blur_score, full_hash, triage_status, content_type "
+                    "FROM files WHERE id = ?", (fid,)
+                ).fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row[0], "path": row[1], "filename": row[2], "extension": row[3],
+                    "size": row[4], "mtime": row[5], "status": row[6],
+                    "hash_value": row[7], "p_hash": row[8], "blur_score": row[9],
+                    "full_hash": row[10], "triage_status": row[11], "content_type": row[12],
+                }
+            except sqlite3.Error as e:
+                logger.error(f"get_file_by_id error (id={fid}): {e}")
+                return None
+
+    def get_files_page(self, page: int = 1, limit: int = 100, triage_status=None,
+                       include_trash: bool = False, content_type=None, status=None,
+                       untriaged_only: bool = False) -> dict:
+        """ページネーション付きファイル一覧を返す"""
+        conditions = []
+        params: list = []
+        if not include_trash:
+            conditions.append("status != 'trash'")
+        if triage_status:
+            conditions.append("triage_status = ?")
+            params.append(triage_status)
+        if untriaged_only:
+            conditions.append("triage_status IS NULL")
+        if content_type:
+            conditions.append("content_type = ?")
+            params.append(content_type)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        offset = (page - 1) * limit
+        with self.lock:
+            try:
+                total = self.conn.execute(f"SELECT COUNT(*) FROM files {where}", params).fetchone()[0]
+                rows = self.conn.execute(
+                    f"SELECT id, path, filename, extension, size, mtime, status, "
+                    f"hash_value, p_hash, blur_score, full_hash, triage_status, content_type "
+                    f"FROM files {where} ORDER BY mtime DESC LIMIT ? OFFSET ?",
+                    params + [limit, offset]
+                ).fetchall()
+                items = [
+                    {"id": r[0], "path": r[1], "filename": r[2], "extension": r[3],
+                     "size": r[4], "mtime": r[5], "status": r[6],
+                     "hash_value": r[7], "p_hash": r[8], "blur_score": r[9],
+                     "full_hash": r[10], "triage_status": r[11], "content_type": r[12]}
+                    for r in rows
+                ]
+                return {"total": total, "page": page, "limit": limit, "items": items}
+            except sqlite3.Error as e:
+                logger.error(f"get_files_page error: {e}")
+                return {"total": 0, "page": page, "limit": limit, "items": []}
+
+    def get_next_triage_file(self, after_id: int = 0) -> Optional[dict]:
+        """未トリアージのファイルを1件取得（after_id より大きいID）"""
+        with self.lock:
+            try:
+                row = self.conn.execute(
+                    "SELECT id, path, filename, extension, size, mtime, status, "
+                    "hash_value, p_hash, blur_score, full_hash, triage_status, content_type "
+                    "FROM files WHERE status != 'trash' AND triage_status IS NULL AND id > ? "
+                    "ORDER BY id ASC LIMIT 1", (after_id,)
+                ).fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": row[0], "path": row[1], "filename": row[2], "extension": row[3],
+                    "size": row[4], "mtime": row[5], "status": row[6],
+                    "hash_value": row[7], "p_hash": row[8], "blur_score": row[9],
+                    "full_hash": row[10], "triage_status": row[11], "content_type": row[12],
+                }
+            except sqlite3.Error as e:
+                logger.error(f"get_next_triage_file error: {e}")
+                return None
+
+    def update_triage_status(self, fid: int, action) -> bool:
+        """triage_status を更新する。action=None で null にリセット"""
+        with self.lock:
+            try:
+                result = self.conn.execute(
+                    "UPDATE files SET triage_status = ? WHERE id = ?", (action, fid)
+                )
+                self.conn.commit()
+                return result.rowcount > 0
+            except sqlite3.Error as e:
+                logger.error(f"update_triage_status error (id={fid}): {e}")
+                return False
+
+    def batch_update_triage_status(self, items: list) -> int:
+        """[(id, action), ...] の一括更新。更新件数を返す"""
+        updated = 0
+        with self.lock:
+            try:
+                for fid, action in items:
+                    result = self.conn.execute(
+                        "UPDATE files SET triage_status = ? WHERE id = ?", (action, fid)
+                    )
+                    updated += result.rowcount
+                self.conn.commit()
+            except sqlite3.Error as e:
+                logger.error(f"batch_update_triage_status error: {e}")
+        return updated
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.lock:
+            try:
+                self.conn.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )
+                self.conn.commit()
+            except sqlite3.Error as e:
+                logger.error(f"set_setting error ({key}): {e}")
+
+    def get_tiny_files(self, max_size: int = 50 * 1024) -> list:
+        with self.lock:
+            try:
+                rows = self.conn.execute(
+                    "SELECT id, path, filename, extension, size, mtime, status, "
+                    "hash_value, p_hash, blur_score, full_hash, triage_status, content_type "
+                    "FROM files WHERE size <= ? AND size > 0 AND status != 'trash' "
+                    "ORDER BY size ASC LIMIT 500",
+                    (max_size,),
+                ).fetchall()
+                return [
+                    {"id": r[0], "path": r[1], "filename": r[2], "extension": r[3],
+                     "size": r[4], "mtime": r[5], "status": r[6],
+                     "hash_value": r[7], "p_hash": r[8], "blur_score": r[9],
+                     "full_hash": r[10], "triage_status": r[11], "content_type": r[12]}
+                    for r in rows
+                ]
+            except sqlite3.Error as e:
+                logger.error(f"get_tiny_files error: {e}")
+                return []
 
     def get_file_count(self) -> int:
         with self.lock:

@@ -518,6 +518,10 @@ progress::-moz-progress-bar {
   .card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .card-grid--tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 900px) {
@@ -873,6 +877,33 @@ progress::-moz-progress-bar {
   cursor: grab;
 }
 
+.thumb-item.previewing {
+  outline: 2px solid var(--accent, #4f8cff);
+  outline-offset: -2px;
+}
+
+.thumb-item.best-shot {
+  outline: 2px solid #f59e0b;
+  outline-offset: -2px;
+}
+
+.best-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: #f59e0b;
+  color: #000;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.thumb-item {
+  position: relative;
+}
+
 .thumb-item.dragging {
   opacity: 0.5;
   cursor: grabbing;
@@ -976,6 +1007,192 @@ progress::-moz-progress-bar {
   font-size: 12px;
   color: var(--danger, #f87171);
   margin: 0;
+}
+
+.file-detail-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.file-detail-preview {
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  border-radius: var(--radius);
+  background: #0a0f1a;
+}
+
+.file-detail-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-detail-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.file-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.file-detail-table th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 400;
+  padding: 3px 8px 3px 0;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.file-detail-table td {
+  color: var(--text-secondary);
+  padding: 3px 0;
+  vertical-align: top;
+}
+
+.cleanup-summary-card {
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.cleanup-summary-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+}
+
+/* Tile-shaped cards for KPI / summary grids */
+.card-grid--tiles {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.card-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100px;
+  max-height: 180px;
+}
+
+/* Dashboard section spacing */
+.dashboard-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Import panel layout */
+.import-panel-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.import-path-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.import-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Group picker list (Duplicates / Similar left pane) */
+.group-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 2px;
+}
+
+.group-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px !important;
+  text-align: left;
+}
+
+.group-picker-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.group-picker-info {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Pane heading */
+.pane-heading {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0 0 6px;
+  padding: 0 2px;
+}
+
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-row:last-child {
+  border-bottom: none;
+}
+
+.setting-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.setting-label {
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0 0 2px;
+}
+
+.setting-desc {
+  font-size: 12px;
+  margin: 0;
+}
+
+.stat-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-mini strong {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .gallery-layout.with-folder {

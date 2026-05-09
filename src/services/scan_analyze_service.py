@@ -253,3 +253,61 @@ def _build_video_thumbnail_bytes(path: str, size: int) -> Optional[bytes]:
     finally:
         cap.release()
 
+
+def run_full_hash(
+    db: DatabaseManager,
+    status_cb: Optional[StatusCallback] = None,
+    progress_cb: Optional[ProgressCallback] = None,
+    should_stop: Optional[StopCallback] = None,
+) -> dict:
+    """簡易ハッシュで重複候補のファイルに対し、ファイル全体の MD5 を full_hash に保存する。"""
+    emit_status = status_cb or (lambda _msg: None)
+    emit_progress = progress_cb or (lambda _done, _total: None)
+    stopper = should_stop or (lambda: False)
+
+    emit_status("完全ハッシュ計算中…")
+    files = db.get_files_needing_full_hash(limit=50000)
+    total = len(files)
+
+    if total == 0:
+        emit_status("完全ハッシュ: 対象ファイルなし")
+        emit_progress(0, 0)
+        return {"stopped": False, "processed": 0, "total": 0}
+
+    emit_status(f"完全ハッシュ: {total} 件を計算中…")
+    started_at = time.time()
+    processed = 0
+
+    for done, (fid, path, _size) in enumerate(files, 1):
+        if stopper():
+            emit_status("完全ハッシュ: 中断")
+            return {"stopped": True, "processed": processed, "total": total}
+
+        if not os.path.exists(path):
+            continue
+
+        try:
+            h = hashlib.md5()
+            with open(path, "rb") as fp:
+                while True:
+                    chunk = fp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            db.update_full_hash(fid, h.hexdigest())
+            processed += 1
+        except OSError as exc:
+            logger.warning("Full hash read error: %s: %s", path, exc)
+        except Exception as exc:
+            logger.error("Full hash error: %s: %s", path, exc, exc_info=True)
+
+        if done % 10 == 0 or done == total:
+            elapsed = time.time() - started_at
+            remain = (total - done) / (done / elapsed) if elapsed > 0 and done else 0
+            emit_status(f"完全ハッシュ: {done}/{total} 残り{format_eta(remain)}")
+            emit_progress(done, total)
+
+    emit_status("完全ハッシュ: 完了")
+    emit_progress(total, total)
+    return {"stopped": False, "processed": processed, "total": total}
+
