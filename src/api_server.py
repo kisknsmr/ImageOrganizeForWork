@@ -46,6 +46,23 @@ class BatchTriageRequest(BaseModel):
     items: list[BatchTriageItem]
 
 
+class BatchTrashRequest(BaseModel):
+    file_ids: list[int]
+
+
+class MoveFileRequest(BaseModel):
+    destination_folder: str = Field(..., min_length=1)
+
+
+class BatchMoveRequest(BaseModel):
+    file_ids: list[int]
+    destination_folder: str = Field(..., min_length=1)
+
+
+class CreateFolderRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+
+
 @dataclass
 class JobState:
     kind: str = "idle"
@@ -299,6 +316,108 @@ def triage_file(file_id: int, payload: TriageRequest) -> dict:
 def batch_triage(payload: BatchTriageRequest) -> dict:
     updated = db.batch_update_triage_status([(item.id, item.action) for item in payload.items])
     return {"ok": True, "updated": updated}
+
+
+@app.post("/api/files/{file_id}/trash")
+def move_file_to_trash(file_id: int) -> dict:
+    ok = db.move_to_trash(file_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="failed to move file to trash")
+    return {"ok": True}
+
+
+@app.post("/api/files/{file_id}/move")
+def move_file(file_id: int, payload: MoveFileRequest) -> dict:
+    row = db.get_file_by_id(file_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="file not found")
+    folder = os.path.normpath(payload.destination_folder)
+    if not os.path.isdir(folder):
+        raise HTTPException(status_code=400, detail="destination folder does not exist")
+    ok = db.move_file_to_folder(file_id, row["path"], folder)
+    if not ok:
+        raise HTTPException(status_code=400, detail="failed to move file")
+    return {"ok": True, "file": db.get_file_by_id(file_id)}
+
+
+@app.post("/api/files/batch-move")
+def batch_move(payload: BatchMoveRequest) -> dict:
+    folder = os.path.normpath(payload.destination_folder)
+    if not os.path.isdir(folder):
+        raise HTTPException(status_code=400, detail="destination folder does not exist")
+    moved = 0
+    failed: list[int] = []
+    for file_id in payload.file_ids:
+        row = db.get_file_by_id(file_id)
+        if not row:
+            failed.append(file_id)
+            continue
+        if db.move_file_to_folder(file_id, row["path"], folder):
+            moved += 1
+        else:
+            failed.append(file_id)
+    return {"ok": True, "moved": moved, "failed_ids": failed}
+
+
+@app.post("/api/files/batch-trash")
+def batch_move_to_trash(payload: BatchTrashRequest) -> dict:
+    moved = 0
+    failed: list[int] = []
+    for file_id in payload.file_ids:
+        if db.move_to_trash(file_id):
+            moved += 1
+        else:
+            failed.append(file_id)
+    return {"ok": True, "moved": moved, "failed_ids": failed}
+
+
+@app.delete("/api/files/{file_id}")
+def delete_file_record(file_id: int) -> dict:
+    ok = db.delete_file_record(file_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="failed to delete file record")
+    return {"ok": True}
+
+
+@app.get("/api/files/{file_id}/permanent-delete-check")
+def permanent_delete_check(file_id: int) -> dict:
+    return {
+        "allowed": db.is_permanent_delete_allowed(file_id),
+        "blocked_reason": db.permanent_delete_blocked_reason(file_id),
+    }
+
+
+@app.post("/api/files/{file_id}/permanent-delete")
+def permanent_delete(file_id: int) -> dict:
+    block = db.permanent_delete_blocked_reason(file_id)
+    if block:
+        raise HTTPException(status_code=400, detail=block)
+    ok = db.permanently_delete_file(file_id, force=False)
+    if not ok:
+        raise HTTPException(status_code=400, detail="failed to permanently delete file")
+    return {"ok": True}
+
+
+@app.get("/api/folders")
+def folders() -> dict:
+    tree = db.get_folder_tree()
+    folder_list = sorted(tree.keys())
+    return {"folders": folder_list}
+
+
+@app.post("/api/folders")
+def create_folder(payload: CreateFolderRequest) -> dict:
+    path = os.path.normpath(payload.path.strip())
+    if not path or path in (".", ".."):
+        raise HTTPException(status_code=400, detail="invalid folder path")
+    invalid_chars = set('<>"|?*') if os.name == "nt" else set("\x00")
+    if any(c in invalid_chars for c in path):
+        raise HTTPException(status_code=400, detail="folder path contains invalid characters")
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"failed to create folder: {exc}") from exc
+    return {"ok": True, "path": path}
 
 
 @app.get("/api/triage/next")

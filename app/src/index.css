@@ -1,7 +1,21 @@
 :root {
-  font-family: Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: #d9e5ef;
-  background: #0e141d;
+  --bg-app: #0b1220;
+  --bg-surface: #121a2a;
+  --bg-surface-2: #0f1725;
+  --bg-hover: #1b2a43;
+  --text-primary: #e6edf7;
+  --text-secondary: #9fb0c8;
+  --text-muted: #7f92ad;
+  --border: #22314b;
+  --accent: #4f8cff;
+  --accent-soft: rgba(79, 140, 255, 0.15);
+  --success: #26b779;
+  --danger: #d24d57;
+  --radius: 12px;
+  --shadow: 0 10px 24px rgba(0, 0, 0, 0.32);
+  font-family: "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--text-primary);
+  background: var(--bg-app);
 }
 
 * {
@@ -11,7 +25,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: #0e141d;
+  background: radial-gradient(1400px 800px at -10% -20%, #1a2742 0%, var(--bg-app) 45%);
 }
 
 #root {
