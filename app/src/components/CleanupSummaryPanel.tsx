@@ -30,7 +30,7 @@ function SummaryCard({ title, count, unit, description, to, color, loading }: Su
 }
 
 export function CleanupSummaryPanel() {
-  const blurry = useQuery({ queryKey: ['blurry', 20], queryFn: () => api.blurry(20) })
+  const blurry = useQuery({ queryKey: ['blurry', 80], queryFn: () => api.blurry(80) })
   const duplicates = useQuery({ queryKey: ['duplicates', false], queryFn: () => api.duplicates(false) })
   const similar = useQuery({ queryKey: ['similar', 5], queryFn: () => api.similar(5) })
   const tiny = useQuery({ queryKey: ['tiny', 50 * 1024], queryFn: () => api.tinyFiles(50 * 1024) })
@@ -65,7 +65,7 @@ export function CleanupSummaryPanel() {
           <SummaryCard
             title="Blurry Photos"
             count={blurry.data?.items.length ?? 0}
-            unit="items (閾値20以下)"
+            unit="items (閾値80以下)"
             description="ブレ・ピンボケ検出。スコアが低いほどぼけています。"
             to="/blurry"
             color="#fb923c"

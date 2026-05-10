@@ -1,3 +1,4 @@
+import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api/client'
@@ -211,7 +212,7 @@ export function TrashPage() {
                 onChange={() => toggle(item.id)}
                 disabled={busy}
               />
-              <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+              <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
               <span>{item.filename}</span>
               <p className="thumb-meta">{item.content_type ?? item.extension}</p>
             </label>

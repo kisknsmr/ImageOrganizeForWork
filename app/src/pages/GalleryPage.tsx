@@ -1,3 +1,4 @@
+import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api } from '../api/client'
@@ -104,7 +105,7 @@ export function GalleryPage() {
         </div>
       </div>
       <div className={`gallery-layout ${showFolderPanel ? 'with-folder' : ''}`}>
-        <div>
+        <div className="pane-scroll">
           <QueryState
             isLoading={files.isPending}
             isError={files.isError}
@@ -134,7 +135,7 @@ export function GalleryPage() {
                       }
                     }}
                   >
-                    <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+                    <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
                     <span>{item.filename}</span>
                     <p className="thumb-meta">{item.content_type ?? item.extension}</p>
                   </button>

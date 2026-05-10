@@ -115,7 +115,9 @@ def run_analyze(
     progress_cb: Optional[ProgressCallback] = None,
     should_stop: Optional[StopCallback] = None,
 ) -> dict:
-    """未解析ファイルの解析処理を実行する。"""
+    """未解析ファイルの解析処理を実行する。スレッドプールで並列処理する。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     emit_status = status_cb or (lambda _msg: None)
     emit_progress = progress_cb or (lambda _done, _total: None)
     stopper = should_stop or (lambda: False)
@@ -125,52 +127,159 @@ def run_analyze(
         emit_status("解析対象なし")
         return {"stopped": False, "processed": 0, "total": 0}
 
+    import multiprocessing
+    # CPU-bound だが GIL の影響で I/O 待ちが多いため ThreadPool が有効
+    # cv2 / numpy は GIL を解放するので並列効果あり
+    workers = min(8, max(2, multiprocessing.cpu_count()))
+    batch_size = workers * 6
+
     done = 0
     started_at = time.time()
-    while not stopper():
-        files = db.get_unprocessed_files(config.BATCH_SIZE_ANALYZER)
-        if not files:
-            break
-        for fid, path, ext, size in files:
-            if stopper():
-                return {"stopped": True, "processed": done, "total": total}
-            if config.LOW_LOAD_MODE:
-                time.sleep(config.LOW_LOAD_SLEEP_TIME)
-            if not os.path.exists(path):
-                db.update_analysis_result(fid, None, "", 0, "missing")
-                done += 1
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        while not stopper():
+            files = db.get_unprocessed_files(batch_size)
+            if not files:
+                break
+
+            tasks = []
+            for fid, path, ext, size in files:
+                if stopper():
+                    return {"stopped": True, "processed": done, "total": total}
+                if not os.path.exists(path):
+                    db.update_analysis_result(fid, None, "", 0, "missing")
+                    done += 1
+                    continue
+                if size > config.MAX_FILE_SIZE_FOR_PROCESSING:
+                    db.update_analysis_result(fid, None, "", 0, "skipped")
+                    done += 1
+                    continue
+                tasks.append((fid, path, ext, size))
+
+            if not tasks:
                 continue
-            if size > config.MAX_FILE_SIZE_FOR_PROCESSING:
-                db.update_analysis_result(fid, None, "", 0, "skipped")
+
+            # スレッドプールで並列解析
+            future_map = {
+                executor.submit(_analyze_one, (path, ext, size)): (fid, path)
+                for fid, path, ext, size in tasks
+            }
+
+            for future in as_completed(future_map):
+                fid, path = future_map[future]
+                try:
+                    md5, phash, blur, thumb, status = future.result()
+                    if status == "error":
+                        db.update_analysis_result(fid, None, "", 0, "error")
+                    else:
+                        if thumb:
+                            db.save_thumbnail(fid, thumb)
+                        db.update_analysis_result(fid, md5, phash, blur)
+                except Exception as exc:
+                    logger.error("analyze failed for %s: %s", path, exc)
+                    db.update_analysis_result(fid, None, "", 0, "error")
                 done += 1
-                continue
-            try:
-                md5_hash = _head_md5(path)
-                blur = 0.0
-                phash = ""
-                if ext in config.IMAGE_EXTENSIONS:
-                    blur = _calc_blur(path)
-                    phash = _calc_phash(path)
-                    thumb = _build_thumbnail_bytes(path, config.DEFAULT_THUMBNAIL_SIZE)
-                    if thumb:
-                        db.save_thumbnail(fid, thumb)
-                elif ext in config.VIDEO_EXTENSIONS:
-                    thumb = _build_video_thumbnail_bytes(path, config.DEFAULT_THUMBNAIL_SIZE)
-                    if thumb:
-                        db.save_thumbnail(fid, thumb)
-                db.update_analysis_result(fid, md5_hash, phash, blur)
-            except Exception as exc:
-                logger.error("run_analyze failed for %s: %s", path, exc, exc_info=True)
-                db.update_analysis_result(fid, None, "", 0, "error")
-            done += 1
-            if done % config.PROGRESS_UPDATE_INTERVAL_ANALYZE == 0 or done == total:
-                elapsed = time.time() - started_at
-                remain = (total - done) / (done / elapsed) if done and elapsed > 0 else 0
-                emit_status(f"解析中: {done}/{total} 残り{format_eta(remain)}")
-                emit_progress(done, total)
+
+            elapsed = time.time() - started_at
+            remain = (total - done) / (done / elapsed) if done and elapsed > 0 else 0
+            emit_status(f"解析中: {done}/{total} 残り{format_eta(remain)} ({workers}スレッド)")
+            emit_progress(done, total)
+
     emit_status("完了")
     emit_progress(total, total)
     return {"stopped": False, "processed": done, "total": total}
+
+
+def _analyze_one(args: tuple) -> tuple:
+    """
+    1ファイルを解析してすべての結果を返す（マルチプロセス用）。
+    画像を1回だけ読み込んで blur・pHash・サムネを一括処理する。
+    戻り値: (md5, phash, blur, thumb_bytes, status)
+    """
+    path, ext, size = args
+    try:
+        md5 = _head_md5(path)
+
+        if ext in config.IMAGE_EXTENSIONS:
+            blur, phash, thumb = _analyze_image_once(path, size)
+        elif ext in config.VIDEO_EXTENSIONS:
+            blur, phash = 0.0, ""
+            thumb = _build_video_thumbnail_bytes(path, config.DEFAULT_THUMBNAIL_SIZE)
+        else:
+            blur, phash, thumb = 0.0, "", None
+
+        return (md5, phash, blur, thumb, "ok")
+    except Exception as exc:
+        logger.error("_analyze_one failed for %s: %s", path, exc)
+        return (None, "", 0.0, None, "error")
+
+
+def _analyze_image_once(path: str, size: int) -> tuple:
+    """
+    画像ファイルを1回の I/O で blur・pHash・サムネを一括生成する。
+    - PIL draft() で縮小しながら読む（4倍高速）→ サムネ生成
+    - 同じバッファから cv2 でグレースケール取得 → blur・pHash
+    戻り値: (blur_score, phash_str, thumb_bytes)
+    """
+    file_size = os.path.getsize(path)
+
+    # ---- サムネイル生成（PIL draft で縮小読み込み） ----
+    thumb: Optional[bytes] = None
+    pil_gray: Optional[np.ndarray] = None  # blur/pHash 計算用に再利用
+    try:
+        with open(path, "rb") as fp:
+            raw = fp.read()
+
+        # PIL でサムネ生成（draft で libjpeg に縮小指示 → 高速）
+        with Image.open(io.BytesIO(raw)) as pil_img:
+            if pil_img.format == "JPEG":
+                pil_img.draft("RGB", (size * 2, size * 2))
+            pil_img = ImageOps.exif_transpose(pil_img)
+            pil_img.thumbnail((size, size), Image.Resampling.LANCZOS)
+            if pil_img.mode not in ("RGB", "L"):
+                pil_img = pil_img.convert("RGB")
+            out = io.BytesIO()
+            pil_img.save(out, format="JPEG", quality=config.THUMBNAIL_QUALITY, optimize=True)
+            thumb = out.getvalue()
+
+        # 同じ raw バッファから cv2 でグレースケール取得（追加 I/O なし）
+        if file_size <= config.MAX_IMAGE_SIZE_FOR_ANALYSIS:
+            buf = np.frombuffer(raw, np.uint8)
+            pil_gray = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)
+
+    except Exception as exc:
+        logger.warning("PIL/cv2 load failed for %s: %s", path, exc)
+
+    # ---- blur スコア計算 ----
+    blur = 0.0
+    phash = ""
+    if pil_gray is not None:
+        try:
+            h, w = pil_gray.shape[:2]
+            target = config.BLUR_EVAL_SIZE
+            if max(h, w) > target:
+                scale = target / max(h, w)
+                gray_small = cv2.resize(
+                    pil_gray,
+                    (max(1, int(w * scale)), max(1, int(h * scale))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            else:
+                gray_small = pil_gray
+            blur = float(cv2.Laplacian(gray_small, cv2.CV_64F).var())
+
+            # pHash
+            img_phash = cv2.resize(pil_gray, config.PHASH_SIZE, interpolation=cv2.INTER_AREA)
+            diff = img_phash[:, 1:] > img_phash[:, :-1]
+            val = 0
+            for idx, flag in enumerate(diff.flatten()):
+                if flag:
+                    val |= 1 << (63 - idx)
+            phash = f"{val:016x}"
+        except Exception as exc:
+            logger.warning("blur/phash failed for %s: %s", path, exc)
+
+    return blur, phash, thumb
 
 
 def _head_md5(path: str) -> Optional[str]:
@@ -191,6 +300,15 @@ def _calc_blur(path: str) -> float:
         img = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)
         if img is None:
             return 0.0
+        # 長辺を BLUR_EVAL_SIZE にリサイズしてから計算する。
+        # フルサイズのままだと高解像度画像でスコアが過大になり、
+        # 人間の知覚（縮小後の見た目）と乖離するため。
+        h, w = img.shape[:2]
+        max_side = max(h, w)
+        target = config.BLUR_EVAL_SIZE
+        if max_side > target:
+            scale = target / max_side
+            img = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
         return float(cv2.Laplacian(img, cv2.CV_64F).var())
     except Exception as exc:
         logger.warning("Blur calculation failed for %s: %s", path, exc)

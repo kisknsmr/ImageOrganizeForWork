@@ -1,0 +1,18 @@
+{
+  "labels": [
+    {"display": "旅行・観光", "keywords": ["travel", "sightseeing", "landmark", "tourism", "tourist spot"]},
+    {"display": "食事", "keywords": ["food", "restaurant", "meal", "gourmet", "dining", "eating"]},
+    {"display": "ゴルフ", "keywords": ["golf", "golf course", "golf club", "fairway", "green"]},
+    {"display": "スポーツ", "keywords": ["sports", "athletic", "exercise", "competition", "game"]},
+    {"display": "自然・風景", "keywords": ["nature", "landscape", "mountain", "forest", "river", "scenery"]},
+    {"display": "海・ビーチ", "keywords": ["beach", "ocean", "sea", "coast", "seaside", "waves"]},
+    {"display": "家族・人物", "keywords": ["family", "portrait", "people", "friends", "children", "person"]},
+    {"display": "イベント・祭り", "keywords": ["event", "festival", "celebration", "party", "ceremony"]},
+    {"display": "建物・建築", "keywords": ["building", "architecture", "city", "urban", "street", "house"]},
+    {"display": "動物・ペット", "keywords": ["animal", "pet", "dog", "cat", "bird", "wildlife"]},
+    {"display": "花・植物", "keywords": ["flower", "plant", "garden", "bloom", "botanical"]},
+    {"display": "夜景・イルミネーション", "keywords": ["night", "illumination", "lights", "citynight", "nightview"]},
+    {"display": "乗り物", "keywords": ["car", "vehicle", "train", "airplane", "transport"]},
+    {"display": "室内・インドア", "keywords": ["indoor", "interior", "room", "home", "office"]}
+  ]
+}

@@ -9,7 +9,8 @@ pydantic>=2.0
 scikit-learn>=1.5
 uvicorn[standard]>=0.30
 
-# --- AI（スマート整理 / CLIP）— 任意 ---
-#   pip install "torch>=2.2" "transformers>=4.37"
+# --- AI（スマート整理 / CLIP）— スマートフォルダ整理機能に必要 ---
+#   pip install "torch>=2.2" "open-clip-torch>=2.24"
 # またはリポジトリ直下で: pip install -e ".[ai]"
-# （pyproject.toml の optional-dependencies.ai と同内容）
+open-clip-torch>=2.24
+torch>=2.2

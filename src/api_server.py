@@ -24,6 +24,8 @@ from PIL import Image, ImageOps
 from .config import config
 from .database import DatabaseManager
 from .services.scan_analyze_service import run_analyze, run_full_hash, run_scan
+from .services import organize_service
+from .services import separate_service
 from .utils import hamming_dist
 
 
@@ -81,15 +83,29 @@ class JobManager:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._state = JobState()
+        self._stop_requested = False
 
     def snapshot(self) -> dict:
         with self._lock:
             return asdict(self._state)
 
+    def request_stop(self) -> bool:
+        with self._lock:
+            if not self._state.running:
+                return False
+            self._stop_requested = True
+            self._state.message = "中止リクエスト受付中..."
+            return True
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._stop_requested
+
     def start(self, kind: str, target, *args) -> None:
         with self._lock:
             if self._state.running:
                 raise RuntimeError(f"{self._state.kind} is already running")
+            self._stop_requested = False
             self._state = JobState(kind=kind, running=True, message="開始中...", started_at=time.time())
 
         thread = threading.Thread(target=self._run, args=(target, args), daemon=True)
@@ -102,6 +118,8 @@ class JobManager:
                 self._state.running = False
                 self._state.percent = 100
                 self._state.finished_at = time.time()
+                if self._stop_requested:
+                    self._state.message = "中止しました"
         except Exception as exc:
             with self._lock:
                 self._state.running = False
@@ -137,15 +155,15 @@ app.add_middleware(
 
 
 def _run_scanner(root_path: str) -> None:
-    run_scan(db, root_path=root_path, status_cb=jobs.set_status, percent_cb=jobs.set_percent)
+    run_scan(db, root_path=root_path, status_cb=jobs.set_status, percent_cb=jobs.set_percent, should_stop=jobs.should_stop)
 
 
 def _run_analyzer() -> None:
-    run_analyze(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
+    run_analyze(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress, should_stop=jobs.should_stop)
 
 
 def _run_full_hash_job() -> None:
-    run_full_hash(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
+    run_full_hash(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress, should_stop=jobs.should_stop)
 
 
 def _image_preview_bytes(path: str, max_size: int = 1920) -> bytes:
@@ -281,6 +299,14 @@ def full_hash_start() -> dict:
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"started": True, "job": jobs.snapshot()}
+
+
+@app.post("/api/job/stop")
+def job_stop() -> dict:
+    ok = jobs.request_stop()
+    if not ok:
+        return {"ok": False, "message": "実行中のジョブがありません"}
+    return {"ok": True, "message": "中止リクエストを送信しました。現在処理中のファイルが完了次第、停止します。"}
 
 
 @app.get("/api/files")
@@ -456,6 +482,72 @@ class SaveSettingRequest(BaseModel):
     value: str
 
 
+# --------------------------------------------------------------------------- #
+# Separate エンドポイント（画像・動画分離）
+# --------------------------------------------------------------------------- #
+
+class SeparatePreviewRequest(BaseModel):
+    source_root: str
+    image_dest: str
+    video_dest: str
+
+
+class SeparateApplyRequest(BaseModel):
+    items: list[dict]
+
+
+@app.post("/api/separate/preview")
+def separate_preview(payload: SeparatePreviewRequest) -> dict:
+    if not os.path.isdir(payload.source_root):
+        raise HTTPException(status_code=400, detail=f"source_root が存在しません: {payload.source_root}")
+    items = separate_service.preview(
+        source_root=payload.source_root,
+        image_dest=payload.image_dest,
+        video_dest=payload.video_dest,
+    )
+    image_count = sum(1 for i in items if i.kind == "image")
+    video_count = sum(1 for i in items if i.kind == "video")
+    return {
+        "items": [{"src": i.src, "dst": i.dst, "kind": i.kind, "rel_path": i.rel_path} for i in items],
+        "image_count": image_count,
+        "video_count": video_count,
+    }
+
+
+@app.post("/api/separate/apply")
+def separate_apply(payload: SeparateApplyRequest) -> dict:
+    return separate_service.apply(payload.items)
+
+
+@app.get("/api/separate/progress")
+def separate_progress() -> dict:
+    return separate_service.get_progress()
+
+
+@app.post("/api/separate/undo")
+def separate_undo() -> dict:
+    return separate_service.undo()
+
+
+@app.get("/api/separate/undo/status")
+def separate_undo_status() -> dict:
+    return {"can_undo": separate_service.can_undo()}
+
+
+@app.post("/api/db/reset-analysis")
+def db_reset_analysis() -> dict:
+    """blur_score・サムネ・ハッシュをリセットして全ファイルを未解析状態に戻す。"""
+    count = db.reset_blur_scores()
+    return {"ok": True, "reset": count}
+
+
+@app.post("/api/db/clear-all")
+def db_clear_all() -> dict:
+    """files・thumbnails を全消去する。スキャンからやり直す場合に使用。"""
+    count = db.clear_all_files()
+    return {"ok": True, "cleared": count}
+
+
 @app.get("/api/settings")
 def get_settings() -> dict:
     keys = ["root_path", "trash_retention_days", "blur_threshold", "similarity_threshold"]
@@ -513,6 +605,111 @@ def similar_best(group_id: str) -> dict:
     if not best:
         raise HTTPException(status_code=404, detail="group not found")
     return {"best": best}
+
+
+# --------------------------------------------------------------------------- #
+# Organize エンドポイント
+# --------------------------------------------------------------------------- #
+
+class OrganizeConfig(BaseModel):
+    time_gap_hours: float = Field(4.0, ge=0.5, le=72.0)
+    confidence_threshold: float = Field(0.25, ge=0.0, le=1.0)
+    sample_per_group: int = Field(3, ge=1, le=10)
+
+
+class OrganizeSuggestRequest(BaseModel):
+    target_path: str
+    destination_root: str
+    config: OrganizeConfig = OrganizeConfig()
+
+
+class OrganizeApplyItem(BaseModel):
+    path: str
+
+
+class OrganizeApplyGroup(BaseModel):
+    group_id: str
+    suggested_name: str
+    items: list[OrganizeApplyItem]
+
+
+class OrganizeApplyRequest(BaseModel):
+    destination_root: str
+    plan: list[OrganizeApplyGroup]
+
+
+@app.post("/api/organize/suggest")
+def organize_suggest(payload: OrganizeSuggestRequest) -> dict:
+    target = payload.target_path
+    if not os.path.isdir(target):
+        raise HTTPException(status_code=400, detail=f"target_path が存在しないか、ディレクトリではありません: {target}")
+    if not os.path.isabs(payload.destination_root):
+        raise HTTPException(status_code=400, detail="destination_root は絶対パスで指定してください")
+
+    # DB からスキャン済みファイルを取得（target_path 配下かつ解析済み）
+    all_files = db.get_all_files_with_info()
+    target_norm = os.path.normpath(target)
+    files = []
+    for f in all_files:
+        path_norm = os.path.normpath(f["path"])
+        if path_norm.startswith(target_norm + os.sep) or path_norm == target_norm:
+            row = db.get_file_by_id(f["id"])
+            if row and row.get("status") not in ("trash",) and row.get("blur_score") is not None:
+                files.append(row)
+
+    if not files:
+        return {"suggestions": [], "message": "対象ファイルが見つかりませんでした（スキャン・解析済みのファイルのみ対象です）"}
+
+    cfg = payload.config
+    suggestions = organize_service.generate_suggestions(
+        files=files,
+        destination_root=payload.destination_root,
+        time_gap_hours=cfg.time_gap_hours,
+        confidence_threshold=cfg.confidence_threshold,
+        sample_per_group=cfg.sample_per_group,
+    )
+
+    return {
+        "suggestions": [
+            {
+                "group_id": s.group_id,
+                "suggested_name": s.suggested_name,
+                "reason": s.reason,
+                "date_range": s.date_range,
+                "items": s.items,
+            }
+            for s in suggestions
+        ]
+    }
+
+
+@app.post("/api/organize/apply")
+def organize_apply(payload: OrganizeApplyRequest) -> dict:
+    dest = payload.destination_root
+    if not os.path.isabs(dest):
+        raise HTTPException(status_code=400, detail="destination_root は絶対パスで指定してください")
+    plan = [
+        {"group_id": g.group_id, "suggested_name": g.suggested_name,
+         "items": [{"path": i.path} for i in g.items]}
+        for g in payload.plan
+    ]
+    result = organize_service.apply_suggestions(plan=plan, destination_root=dest)
+    return result
+
+
+@app.post("/api/organize/undo")
+def organize_undo() -> dict:
+    return organize_service.undo_last_apply()
+
+
+@app.get("/api/organize/undo/status")
+def organize_undo_status() -> dict:
+    return {"can_undo": organize_service.can_undo()}
+
+
+@app.get("/api/organize/presets")
+def organize_presets() -> dict:
+    return {"labels": organize_service.load_presets()}
 
 
 @app.websocket("/ws/progress")

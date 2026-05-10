@@ -1,3 +1,4 @@
+import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api } from '../api/client'
@@ -34,8 +35,7 @@ export function DuplicatesPage() {
 
   const selectAllExceptFirst = () => {
     if (!currentGroup) return
-    const ids = currentGroup.items.slice(1).map((i) => i.id)
-    setSelectedIds(ids)
+    setSelectedIds(currentGroup.items.slice(1).map((i) => i.id))
   }
 
   const trashMutation = useMutation({
@@ -80,13 +80,16 @@ export function DuplicatesPage() {
         <h2>Duplicates</h2>
         <p className="page-subtitle">同一ハッシュの画像グループを確認し、不要ファイルをゴミ箱へ送ります。</p>
       </header>
+
       <div className="toolbar">
         <div className="toolbar-group">
           <span className="status-chip">
             <span className="status-dot" />
             {duplicates.isPending ? '読込中...' : `${duplicates.data?.groups.length ?? 0} groups`}
           </span>
-          {currentGroup && <span className="muted">Selected: {selectedIds.length} / {currentGroup.items.length}</span>}
+          {currentGroup && (
+            <span className="muted">Selected: {selectedIds.length} / {currentGroup.items.length}</span>
+          )}
         </div>
         <div className="toolbar-group">
           <ViewControls
@@ -103,7 +106,6 @@ export function DuplicatesPage() {
             type="button" className="button secondary"
             disabled={fullHashMutation.isPending}
             onClick={() => fullHashMutation.mutate()}
-            title="簡易ハッシュが同じファイルに対し、ファイル全体の MD5 を保存します"
           >
             {fullHashMutation.isPending ? <Spinner size={14} inline /> : null}
             完全MD5を計算
@@ -125,10 +127,10 @@ export function DuplicatesPage() {
           </button>
         </div>
       </div>
-      {/* 3ペインレイアウト: グループ一覧 | サムネイル一覧 | プレビュー詳細 */}
-      <div className="gallery-layout" style={{ gridTemplateColumns: 'minmax(240px, 26vw) 1fr 300px' }}>
+
+      <div className="gallery-layout" style={{ gridTemplateColumns: 'minmax(220px, 24vw) 1fr 300px' }}>
         {/* 左: グループ一覧 */}
-        <div style={{ overflowY: 'auto', maxHeight: '75vh' }}>
+        <div className="pane-scroll">
           <p className="pane-heading muted">グループ一覧</p>
           <QueryState
             isLoading={duplicates.isPending} isError={duplicates.isError} error={duplicates.error}
@@ -163,8 +165,10 @@ export function DuplicatesPage() {
         </div>
 
         {/* 中央: グループ内サムネイル */}
-        <aside className="preview-pane" style={{ overflowY: 'auto', maxHeight: '75vh' }}>
-          {!currentGroup && <p className="muted">左からグループを選択してください。</p>}
+        <aside className="preview-pane pane-scroll">
+          {!currentGroup && (
+            <p className="muted" style={{ padding: 16 }}>左からグループを選択してください。</p>
+          )}
           {currentGroup && (
             <div
               className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
@@ -185,7 +189,7 @@ export function DuplicatesPage() {
                     disabled={busy}
                     onClick={(e) => e.stopPropagation()}
                   />
-                  <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+                  <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
                   <span>{item.filename}</span>
                 </label>
               ))}
@@ -194,7 +198,9 @@ export function DuplicatesPage() {
         </aside>
 
         {/* 右: プレビュー＋詳細 */}
-        <FileDetailPane item={previewItem} placeholder="サムネイルをクリックしてプレビュー" />
+        <div className="pane-scroll">
+          <FileDetailPane item={previewItem} placeholder="サムネイルをクリックしてプレビュー" />
+        </div>
       </div>
     </section>
   )

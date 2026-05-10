@@ -1,3 +1,4 @@
+import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api/client'
@@ -150,6 +151,7 @@ export function ManualSortPage() {
         </div>
       </article>
       <div className="gallery-layout with-folder">
+        <div className="pane-scroll">
         <div
           className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
           style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
@@ -169,11 +171,12 @@ export function ManualSortPage() {
                   onChange={() => toggle(item.id)}
                   disabled={busy}
                 />
-                <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+                <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
                 <span>{item.filename}</span>
                 <p className="thumb-meta">{item.content_type ?? item.extension}</p>
               </label>
             ))}
+        </div>
         </div>
         <FolderDropPanel
           folders={folders.data?.folders ?? []}

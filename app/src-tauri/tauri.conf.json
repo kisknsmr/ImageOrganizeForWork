@@ -9,6 +9,25 @@
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
   },
+  "plugins": {
+    "shell": {
+      "open": true,
+      "scope": [
+        {
+          "name": "python-api",
+          "cmd": "python",
+          "args": true,
+          "sidecar": false
+        },
+        {
+          "name": "uvicorn-api",
+          "cmd": "uvicorn",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    }
+  },
   "app": {
     "windows": [
       {

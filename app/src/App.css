@@ -197,6 +197,12 @@ select:focus-visible {
   gap: 16px;
 }
 
+/* ペイン系: gallery-layout の各セルだけスクロール */
+.pane-scroll {
+  overflow-y: auto;
+  height: calc(100vh - 220px);
+}
+
 .page-header h2 {
   font-size: 28px;
   letter-spacing: 0.01em;
@@ -370,6 +376,7 @@ select:focus-visible {
   width: 100%;
   aspect-ratio: 1 / 1;
   object-fit: cover;
+  background: #1a2540;
 }
 
 .thumb-item span {
@@ -1203,4 +1210,23 @@ progress::-moz-progress-bar {
   .gallery-layout.with-folder {
     grid-template-columns: 1fr;
   }
+}
+
+/* AI Organize フォーム */
+.organize-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.organize-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.organize-form-row--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
 }

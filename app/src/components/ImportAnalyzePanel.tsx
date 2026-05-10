@@ -26,6 +26,15 @@ export function ImportAnalyzePanel() {
     onError: (error) => toast.error(getApiErrorMessage(error), 'スキャン開始に失敗しました'),
   })
 
+  const stopJob = useMutation({
+    mutationFn: api.jobStop,
+    onSuccess: (res) => {
+      if (res.ok) toast.success(res.message, 'Stop')
+      else toast.info(res.message, 'Stop')
+    },
+    onError: (error) => toast.error(getApiErrorMessage(error), '中止に失敗しました'),
+  })
+
   const startAnalyze = useMutation({
     mutationFn: api.analyzeStart,
     onSuccess: (res) => {
@@ -96,6 +105,18 @@ export function ImportAnalyzePanel() {
               {startAnalyze.isPending ? <Spinner size={14} inline /> : null}
               Start Analyze
             </button>
+            {running && (
+              <button
+                className="button danger"
+                type="button"
+                disabled={stopJob.isPending}
+                onClick={() => stopJob.mutate()}
+                title="現在のファイル処理が完了次第、停止します"
+              >
+                {stopJob.isPending ? <Spinner size={14} inline /> : null}
+                中止
+              </button>
+            )}
             <span className="status-chip" style={{ marginLeft: 'auto' }}>
               <span className="status-dot" style={{ background: running ? 'var(--success)' : 'var(--text-muted)' }} />
               {running ? `Running ${percent}%` : 'Idle'}

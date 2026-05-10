@@ -1,3 +1,4 @@
+import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api } from '../api/client'
@@ -104,9 +105,9 @@ export function SimilarPage() {
       </div>
 
       {/* 3ペインレイアウト: グループ一覧 | サムネイル一覧 | プレビュー詳細 */}
-      <div className="gallery-layout" style={{ gridTemplateColumns: 'minmax(240px, 26vw) 1fr 300px' }}>
+      <div className="gallery-layout" style={{ gridTemplateColumns: 'minmax(220px, 24vw) 1fr 300px' }}>
         {/* 左: グループ一覧 */}
-        <div style={{ overflowY: 'auto', maxHeight: '75vh' }}>
+        <div className="pane-scroll">
           <p className="pane-heading muted">グループ一覧</p>
           <QueryState
             isLoading={similar.isPending} isError={similar.isError} error={similar.error}
@@ -139,7 +140,7 @@ export function SimilarPage() {
         </div>
 
         {/* 中央: グループ内サムネイル */}
-        <aside className="preview-pane" style={{ overflowY: 'auto', maxHeight: '75vh' }}>
+        <aside className="preview-pane pane-scroll">
           {!currentGroup && <p className="muted">左からグループを選択してください。</p>}
           {currentGroup && (
             <>
@@ -166,7 +167,7 @@ export function SimilarPage() {
                         disabled={busy}
                         onClick={(e) => e.stopPropagation()}
                       />
-                      <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+                      <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
                       {isBest && <span className="best-badge">★</span>}
                       <span>{item.filename}</span>
                       <p className="thumb-meta">
@@ -181,7 +182,9 @@ export function SimilarPage() {
         </aside>
 
         {/* 右: プレビュー＋詳細 */}
-        <FileDetailPane item={previewItem} placeholder="サムネイルをクリックしてプレビュー" />
+        <div className="pane-scroll">
+          <FileDetailPane item={previewItem} placeholder="サムネイルをクリックしてプレビュー" />
+        </div>
       </div>
     </section>
   )

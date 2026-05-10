@@ -22,8 +22,8 @@ class AppConfig:
     BATCH_SIZE_DELETE: int = 900
 
     # サムネイル設定
-    DEFAULT_THUMBNAIL_SIZE: int = 120
-    THUMBNAIL_QUALITY: int = 70
+    DEFAULT_THUMBNAIL_SIZE: int = 240
+    THUMBNAIL_QUALITY: int = 80
 
     # 画像処理設定
     PHASH_SIZE: Tuple[int, int] = (9, 8)
@@ -73,9 +73,10 @@ class AppConfig:
     MAX_SIMILARITY_DISTANCE: int = 25
 
     # ピンボケ検出設定
-    DEFAULT_BLUR_THRESHOLD: int = 20
-    MAX_BLUR_THRESHOLD: int = 50
+    DEFAULT_BLUR_THRESHOLD: int = 80   # リサイズ後 Laplacian に合わせた既定値
+    MAX_BLUR_THRESHOLD: int = 300
     BLUR_LIST_LIMIT: int = 2000
+    BLUR_EVAL_SIZE: int = 1024         # blur 計算前にリサイズする長辺ピクセル数
 
     # クラスタリング設定
     MAX_CLUSTERING_IMAGES: int = 10000

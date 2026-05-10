@@ -36,6 +36,29 @@ export type PagedFiles = {
   items: FileItem[]
 }
 
+export type SeparateItem = {
+  src: string
+  dst: string
+  kind: 'image' | 'video'
+  rel_path: string
+}
+
+export type OrganizeItem = {
+  id: number
+  path: string
+  filename: string
+  mtime: number
+  is_representative: boolean
+}
+
+export type OrganizeSuggestion = {
+  group_id: string
+  suggested_name: string
+  reason: string
+  date_range: { start: string; end: string }
+  items: OrganizeItem[]
+}
+
 export type LibraryStats = {
   total: number
   analyzed: number

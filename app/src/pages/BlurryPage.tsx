@@ -1,3 +1,4 @@
+import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api/client'
@@ -14,7 +15,7 @@ export function BlurryPage() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const view = useViewMode('blurry')
-  const [threshold, setThreshold] = useState(20)
+  const [threshold, setThreshold] = useState(80)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
 
@@ -73,7 +74,7 @@ export function BlurryPage() {
           <label className="row" style={{ gap: 8, alignItems: 'center' }}>
             <span className="muted" style={{ whiteSpace: 'nowrap' }}>閾値: {threshold}</span>
             <input
-              type="range" min={5} max={100} value={threshold}
+              type="range" min={10} max={300} step={5} value={threshold}
               onChange={(e) => { setThreshold(Number(e.target.value)); setSelectedIds([]) }}
               style={{ width: 120 }}
             />
@@ -102,6 +103,7 @@ export function BlurryPage() {
         emptyMessage="ぼけ候補は見つかりませんでした。閾値を上げてみてください。"
       />
       <div className="gallery-layout with-folder">
+        <div className="pane-scroll">
         <div
           className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
           style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
@@ -121,13 +123,16 @@ export function BlurryPage() {
                 disabled={busy}
                 onClick={(e) => e.stopPropagation()}
               />
-              <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+              <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
               <span>{item.filename}</span>
               <p className="thumb-meta">blur: {item.blur_score?.toFixed(1) ?? '-'}</p>
             </label>
           ))}
         </div>
-        <FileDetailPane item={previewItem} placeholder="サムネイルをクリックしてプレビュー" />
+        </div>
+        <div className="pane-scroll">
+          <FileDetailPane item={previewItem} placeholder="サムネイルをクリックしてプレビュー" />
+        </div>
       </div>
     </section>
   )

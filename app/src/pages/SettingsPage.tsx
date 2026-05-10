@@ -63,6 +63,7 @@ export function SettingsPage() {
   const [blurThreshold, setBlurThreshold] = useState('')
   const [simThreshold, setSimThreshold] = useState('')
   const [savingKey, setSavingKey] = useState<string | null>(null)
+  const [confirmAction, setConfirmAction] = useState<'reset-analysis' | 'clear-all' | null>(null)
 
   useEffect(() => {
     if (!settings.data) return
@@ -83,6 +84,32 @@ export function SettingsPage() {
     onError: (error) => {
       toast.error(getApiErrorMessage(error), '保存に失敗しました')
       setSavingKey(null)
+    },
+  })
+
+  const resetAnalysisMutation = useMutation({
+    mutationFn: api.dbResetAnalysis,
+    onSuccess: (data) => {
+      toast.success(`${data.reset} 件を未解析状態にリセットしました。再解析を実行してください。`, 'DB')
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
+      setConfirmAction(null)
+    },
+    onError: (error) => {
+      toast.error(getApiErrorMessage(error), 'リセットに失敗しました')
+      setConfirmAction(null)
+    },
+  })
+
+  const clearAllMutation = useMutation({
+    mutationFn: api.dbClearAll,
+    onSuccess: (data) => {
+      toast.success(`${data.cleared} 件のレコードを全消去しました。スキャンからやり直してください。`, 'DB')
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
+      setConfirmAction(null)
+    },
+    onError: (error) => {
+      toast.error(getApiErrorMessage(error), 'クリアに失敗しました')
+      setConfirmAction(null)
     },
   })
 
@@ -179,6 +206,62 @@ export function SettingsPage() {
                 min={0}
                 max={365}
               />
+            </div>
+          </article>
+          {/* DB 管理 */}
+          <article className="card" style={{ borderColor: '#6e2d38' }}>
+            <h3 className="section-title" style={{ color: 'var(--danger)' }}>DB 管理（危険な操作）</h3>
+            <div className="settings-list">
+              <div className="setting-row">
+                <div className="setting-info">
+                  <p className="setting-label">解析結果をリセット</p>
+                  <p className="muted setting-desc">
+                    blur_score・サムネイル・ハッシュを全消去し、全ファイルを未解析状態に戻します。<br />
+                    ブレ検知ロジック変更後に再解析し直す場合に使用します。ファイル自体は削除されません。
+                  </p>
+                </div>
+                <div>
+                  {confirmAction === 'reset-analysis' ? (
+                    <div className="row">
+                      <span className="muted" style={{ fontSize: 12 }}>本当にリセットしますか？</span>
+                      <button className="button danger" onClick={() => resetAnalysisMutation.mutate()}
+                        disabled={resetAnalysisMutation.isPending}>
+                        {resetAnalysisMutation.isPending ? <Spinner size={14} inline /> : '実行'}
+                      </button>
+                      <button className="button ghost" onClick={() => setConfirmAction(null)}>キャンセル</button>
+                    </div>
+                  ) : (
+                    <button className="button danger" onClick={() => setConfirmAction('reset-analysis')}>
+                      解析リセット
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="setting-row">
+                <div className="setting-info">
+                  <p className="setting-label">DB を全消去</p>
+                  <p className="muted setting-desc">
+                    登録済みの全ファイル情報・サムネイルを DB から削除します。<br />
+                    スキャンからやり直す場合に使用します。元の画像ファイルは削除されません。
+                  </p>
+                </div>
+                <div>
+                  {confirmAction === 'clear-all' ? (
+                    <div className="row">
+                      <span className="muted" style={{ fontSize: 12 }}>本当に全消去しますか？</span>
+                      <button className="button danger" onClick={() => clearAllMutation.mutate()}
+                        disabled={clearAllMutation.isPending}>
+                        {clearAllMutation.isPending ? <Spinner size={14} inline /> : '実行'}
+                      </button>
+                      <button className="button ghost" onClick={() => setConfirmAction(null)}>キャンセル</button>
+                    </div>
+                  ) : (
+                    <button className="button danger" onClick={() => setConfirmAction('clear-all')}>
+                      全消去
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </article>
         </>

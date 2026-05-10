@@ -3,6 +3,8 @@ import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-d
 import { Sidebar } from './components/Sidebar'
 import { ToastProvider } from './components/Toast'
 import { AiOrganizePage } from './pages/AiOrganizePage'
+import { SeparatePage } from './pages/SeparatePage'
+import { SmartSortPage } from './pages/SmartSortPage'
 import { BlurryPage } from './pages/BlurryPage'
 import { CleanupPage } from './pages/CleanupPage'
 import { DuplicatesPage } from './pages/DuplicatesPage'
@@ -32,6 +34,8 @@ function AnimatedRoutes() {
         <Route path="/similar" element={<SimilarPage />} />
         <Route path="/manual" element={<ManualSortPage />} />
         <Route path="/ai-organize" element={<AiOrganizePage />} />
+        <Route path="/smart-sort" element={<SmartSortPage />} />
+        <Route path="/separate" element={<SeparatePage />} />
         <Route path="/trash" element={<TrashPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

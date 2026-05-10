@@ -1,4 +1,4 @@
-import type { FileItem, LibraryStats, PagedFiles, ScanJob } from '../types'
+import type { FileItem, LibraryStats, OrganizeSuggestion, PagedFiles, ScanJob, SeparateItem } from '../types'
 
 const API_BASE = 'http://127.0.0.1:8765'
 
@@ -20,6 +20,7 @@ export const api = {
     request<ScanJob>('/api/scan/start', { method: 'POST', body: JSON.stringify({ root_path: rootPath }) }),
   scanStatus: () => request<ScanJob>('/api/scan/status'),
   analyzeStart: () => request<{ started: boolean; message?: string; job: ScanJob }>('/api/analyze/start', { method: 'POST' }),
+  jobStop: () => request<{ ok: boolean; message: string }>('/api/job/stop', { method: 'POST' }),
   analyzeFullHashStart: () =>
     request<{ started: boolean; message?: string; job: ScanJob }>('/api/analyze/full-hash/start', { method: 'POST' }),
   files: (params: URLSearchParams) => request<PagedFiles>(`/api/files?${params.toString()}`),
@@ -69,5 +70,47 @@ export const api = {
     ),
   previewUrl: (id: number) => `${API_BASE}/api/files/${id}/preview`,
   thumbnailUrl: (id: number) => `${API_BASE}/api/files/${id}/thumbnail`,
+
+  // Separate (画像・動画分離)
+  separatePreview: (params: { source_root: string; image_dest: string; video_dest: string }) =>
+    request<{ items: SeparateItem[]; image_count: number; video_count: number }>('/api/separate/preview', {
+      method: 'POST', body: JSON.stringify(params),
+    }),
+  separateApply: (items: SeparateItem[]) =>
+    request<{ started: boolean; message?: string }>('/api/separate/apply', {
+      method: 'POST', body: JSON.stringify({ items }),
+    }),
+  separateProgress: () =>
+    request<{ running: boolean; finished: boolean; total: number; done: number; moved: number; skipped: number; failed_count: number; percent: number }>('/api/separate/progress'),
+  separateUndo: () =>
+    request<{ ok: boolean; restored?: number; failed?: string[]; message?: string }>('/api/separate/undo', { method: 'POST' }),
+  separateUndoStatus: () => request<{ can_undo: boolean }>('/api/separate/undo/status'),
+
+  // DB management
+  dbResetAnalysis: () => request<{ ok: boolean; reset: number }>('/api/db/reset-analysis', { method: 'POST' }),
+  dbClearAll: () => request<{ ok: boolean; cleared: number }>('/api/db/clear-all', { method: 'POST' }),
+
+  // Organize
+  organizePresets: () =>
+    request<{ labels: Array<{ display: string; keywords: string[] }> }>('/api/organize/presets'),
+  organizeSuggest: (params: {
+    target_path: string
+    destination_root: string
+    config?: { time_gap_hours?: number; confidence_threshold?: number; sample_per_group?: number }
+  }) =>
+    request<{
+      suggestions: OrganizeSuggestion[]
+      message?: string
+    }>('/api/organize/suggest', { method: 'POST', body: JSON.stringify(params) }),
+  organizeApply: (params: {
+    destination_root: string
+    plan: Array<{ group_id: string; suggested_name: string; items: Array<{ path: string }> }>
+  }) =>
+    request<{ moved: number; failed: string[] }>('/api/organize/apply', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+  organizeUndo: () => request<{ ok: boolean; restored?: number; failed?: string[]; message?: string }>('/api/organize/undo', { method: 'POST' }),
+  organizeUndoStatus: () => request<{ can_undo: boolean }>('/api/organize/undo/status'),
 }
 

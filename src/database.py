@@ -846,6 +846,37 @@ class DatabaseManager:
                 logger.error(f"get_non_trash_files_raw error: {e}")
                 return []
 
+    def reset_blur_scores(self) -> int:
+        """全ファイルの blur_score を 0 にリセットし、status を unprocessed に戻す。
+        再解析で正しい値を計算し直すために使用する。"""
+        with self.lock:
+            try:
+                cur = self.conn.execute(
+                    "UPDATE files SET blur_score = 0, p_hash = '', hash_value = NULL, "
+                    "status = 'unprocessed' WHERE status NOT IN ('trash', 'missing')"
+                )
+                self.conn.execute("DELETE FROM thumbnails")
+                self.conn.commit()
+                return cur.rowcount
+            except sqlite3.Error as e:
+                logger.error(f"Failed to reset blur scores: {e}")
+                return 0
+
+    def clear_all_files(self) -> int:
+        """files・thumbnails テーブルを全消去する（スキャンからやり直し）。"""
+        with self.lock:
+            try:
+                cur = self.conn.execute("SELECT COUNT(*) FROM files")
+                count = cur.fetchone()[0]
+                self.conn.execute("DELETE FROM thumbnails")
+                self.conn.execute("DELETE FROM files")
+                self.conn.execute("DELETE FROM sqlite_sequence WHERE name='files'")
+                self.conn.commit()
+                return count
+            except sqlite3.Error as e:
+                logger.error(f"Failed to clear all files: {e}")
+                return 0
+
     def close(self) -> None:
         if self.conn:
             try:
