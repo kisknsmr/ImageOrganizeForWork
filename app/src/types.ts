@@ -39,7 +39,7 @@ export type PagedFiles = {
 export type SeparateItem = {
   src: string
   dst: string
-  kind: 'image' | 'video'
+  kind: 'image' | 'video' | 'audio' | 'other'
   rel_path: string
 }
 

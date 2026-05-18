@@ -15,35 +15,30 @@ async function pickFolder(): Promise<string | null> {
   return null
 }
 
-function FolderInput({
-  label, description, value, onChange, disabled,
-}: {
-  label: string; description: string; value: string; onChange: (v: string) => void; disabled: boolean
-}) {
-  return (
-    <div className="organize-form-row">
-      <label className="label">{label}</label>
-      <p className="muted" style={{ fontSize: 11, margin: '0 0 4px' }}>{description}</p>
-      <div className="row">
-        <input className="input" value={value} onChange={(e) => onChange(e.target.value)}
-          placeholder="例: D:/Pictures/sorted" disabled={disabled} />
-        {isTauri && (
-          <button className="button ghost" type="button" disabled={disabled}
-            onClick={async () => { const p = await pickFolder(); if (p) onChange(p) }}>
-            参照...
-          </button>
-        )}
-      </div>
-    </div>
-  )
+type KindFilter = 'all' | 'image' | 'video' | 'audio' | 'other'
+
+const KIND_LABEL: Record<string, string> = {
+  image: '画像',
+  video: '動画',
+  audio: '音声',
+  other: 'その他',
 }
 
-type PreviewTableProps = {
-  items: SeparateItem[]
-  filter: 'all' | 'image' | 'video'
+const KIND_COLOR: Record<string, { bg: string; text: string }> = {
+  image: { bg: 'rgba(79,140,255,0.2)', text: '#79a8ff' },
+  video: { bg: 'rgba(167,139,250,0.2)', text: '#c4b5fd' },
+  audio: { bg: 'rgba(52,211,153,0.2)', text: '#6ee7b7' },
+  other: { bg: 'rgba(156,163,175,0.2)', text: '#9ca3af' },
 }
 
-function PreviewTable({ items, filter }: PreviewTableProps) {
+const DEST_FOLDER_KEY: Record<string, string> = {
+  image: '01_picture',
+  video: '02_movie',
+  audio: '03_sound',
+  other: '04_others',
+}
+
+function PreviewTable({ items, filter }: { items: SeparateItem[]; filter: KindFilter }) {
   const filtered = filter === 'all' ? items : items.filter((i) => i.kind === filter)
   return (
     <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
@@ -52,33 +47,44 @@ function PreviewTable({ items, filter }: PreviewTableProps) {
           <tr style={{ position: 'sticky', top: 0, background: '#111928', zIndex: 1 }}>
             <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-muted)', fontWeight: 600, width: 60 }}>種別</th>
             <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-muted)', fontWeight: 600 }}>相対パス（移動元）</th>
-            <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-muted)', fontWeight: 600 }}>移動先</th>
+            <th style={{ textAlign: 'left', padding: '6px 8px', color: 'var(--text-muted)', fontWeight: 600 }}>移動先フォルダ</th>
           </tr>
         </thead>
         <tbody>
-          {filtered.map((item, i) => (
-            <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-              <td style={{ padding: '5px 8px' }}>
-                <span style={{
-                  display: 'inline-block', padding: '1px 6px', borderRadius: 4, fontSize: 10, fontWeight: 700,
-                  background: item.kind === 'image' ? 'rgba(79,140,255,0.2)' : 'rgba(167,139,250,0.2)',
-                  color: item.kind === 'image' ? '#79a8ff' : '#c4b5fd',
-                }}>
-                  {item.kind === 'image' ? '画像' : '動画'}
-                </span>
-              </td>
-              <td style={{ padding: '5px 8px', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
-                {item.rel_path}
-              </td>
-              <td style={{ padding: '5px 8px', color: 'var(--text-muted)', wordBreak: 'break-all', fontSize: 11 }}>
-                {item.dst}
-              </td>
-            </tr>
-          ))}
+          {filtered.map((item, i) => {
+            const c = KIND_COLOR[item.kind] ?? KIND_COLOR.other
+            return (
+              <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                <td style={{ padding: '5px 8px' }}>
+                  <span style={{
+                    display: 'inline-block', padding: '1px 6px', borderRadius: 4, fontSize: 10, fontWeight: 700,
+                    background: c.bg, color: c.text,
+                  }}>
+                    {KIND_LABEL[item.kind] ?? item.kind}
+                  </span>
+                </td>
+                <td style={{ padding: '5px 8px', color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
+                  {item.rel_path}
+                </td>
+                <td style={{ padding: '5px 8px', color: 'var(--text-muted)', wordBreak: 'break-all', fontSize: 11 }}>
+                  {DEST_FOLDER_KEY[item.kind] ?? 'others'}
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
   )
+}
+
+type PreviewResult = {
+  items: SeparateItem[]
+  image_count: number
+  video_count: number
+  audio_count: number
+  other_count: number
+  dest_folders: Record<string, string>
 }
 
 export function SeparatePage() {
@@ -86,10 +92,8 @@ export function SeparatePage() {
   const queryClient = useQueryClient()
 
   const [sourceRoot, setSourceRoot] = useState('')
-  const [imageDest, setImageDest] = useState('')
-  const [videoDest, setVideoDest] = useState('')
-  const [preview, setPreview] = useState<SeparateItem[] | null>(null)
-  const [filter, setFilter] = useState<'all' | 'image' | 'video'>('all')
+  const [previewData, setPreviewData] = useState<PreviewResult | null>(null)
+  const [filter, setFilter] = useState<KindFilter>('all')
   const [applying, setApplying] = useState(false)
 
   const undoStatus = useQuery({
@@ -98,7 +102,6 @@ export function SeparatePage() {
     refetchInterval: 2000,
   })
 
-  // 進捗ポーリング（実行中のみ）
   const progress = useQuery({
     queryKey: ['separate-progress'],
     queryFn: api.separateProgress,
@@ -106,10 +109,9 @@ export function SeparatePage() {
     enabled: applying,
   })
 
-  // 完了検知
   if (applying && progress.data?.finished) {
     setApplying(false)
-    setPreview(null)
+    setPreviewData(null)
     const d = progress.data
     toast.success(`${d.moved} 件を移動しました`, 'Separate')
     if (d.failed_count > 0) toast.warning(`${d.failed_count} 件の移動に失敗しました`, 'Separate')
@@ -117,17 +119,27 @@ export function SeparatePage() {
   }
 
   const previewMutation = useMutation({
-    mutationFn: () => api.separatePreview({ source_root: sourceRoot, image_dest: imageDest, video_dest: videoDest }),
+    mutationFn: () => api.separatePreview({ source_root: sourceRoot }),
     onSuccess: (data) => {
-      setPreview(data.items)
+      if (data.items.length === 0) {
+        toast.warning('対象ファイルが見つかりませんでした。フォルダにファイルが存在するか確認してください。', 'Separate')
+        return
+      }
+      setPreviewData(data)
       setFilter('all')
-      toast.success(`画像 ${data.image_count} 件・動画 ${data.video_count} 件を検出しました`, 'Separate')
+      const parts = [
+        data.image_count > 0 ? `画像 ${data.image_count} 件` : '',
+        data.video_count > 0 ? `動画 ${data.video_count} 件` : '',
+        data.audio_count > 0 ? `音声 ${data.audio_count} 件` : '',
+        data.other_count > 0 ? `その他 ${data.other_count} 件` : '',
+      ].filter(Boolean).join('・')
+      toast.success(`${parts} を検出しました`, 'Separate')
     },
     onError: (e) => toast.error(getApiErrorMessage(e), 'プレビューに失敗しました'),
   })
 
   const applyMutation = useMutation({
-    mutationFn: () => api.separateApply(preview!),
+    mutationFn: () => api.separateApply(previewData!.items),
     onSuccess: (data) => {
       if (data.started) {
         setApplying(true)
@@ -149,42 +161,74 @@ export function SeparatePage() {
   })
 
   const busy = previewMutation.isPending || applyMutation.isPending || applying
-  const imageCount = preview?.filter((i) => i.kind === 'image').length ?? 0
-  const videoCount = preview?.filter((i) => i.kind === 'video').length ?? 0
-  const canPreview = !!sourceRoot && !!imageDest && !!videoDest
+  const preview = previewData?.items ?? null
   const prog = progress.data
+
+  const FILTER_BUTTONS: { key: KindFilter; label: string }[] = [
+    { key: 'all', label: 'すべて' },
+    { key: 'image', label: '画像のみ' },
+    { key: 'video', label: '動画のみ' },
+    { key: 'audio', label: '音声のみ' },
+    { key: 'other', label: 'その他のみ' },
+  ]
 
   return (
     <section className="page">
       <header className="page-header">
         <h2>Separate</h2>
         <p className="page-subtitle">
-          フォルダ構造を保ったまま、画像と動画を別々の出力先フォルダへ分離します。
+          対象フォルダを指定すると、同じ階層に <code>01_picture</code> / <code>02_movie</code> / <code>03_sound</code> / <code>04_others</code> フォルダを作成してファイルを移動します。
         </p>
       </header>
 
       {/* 設定 */}
       <article className="card" style={{ flexShrink: 0 }}>
         <div className="organize-form">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
-            <FolderInput
-              label="分離対象フォルダ"
-              description="この中のファイルを画像と動画に分けます"
-              value={sourceRoot} onChange={setSourceRoot} disabled={busy}
-            />
-            <FolderInput
-              label="画像の出力先"
-              description="画像ファイルはここに移動されます"
-              value={imageDest} onChange={setImageDest} disabled={busy}
-            />
-            <FolderInput
-              label="動画の出力先"
-              description="動画ファイルはここに移動されます"
-              value={videoDest} onChange={setVideoDest} disabled={busy}
-            />
+          <div className="organize-form-row">
+            <label className="label">分離対象フォルダ</label>
+            <p className="muted" style={{ fontSize: 11, margin: '0 0 4px' }}>
+              このフォルダの中身を種別に分けます。親フォルダ内に出力先フォルダが自動作成されます。
+            </p>
+            <div className="row">
+              <input
+                className="input"
+                value={sourceRoot}
+                onChange={(e) => setSourceRoot(e.target.value)}
+                placeholder="例: D:/Pictures/raw"
+                disabled={busy}
+              />
+              {isTauri && (
+                <button className="button ghost" type="button" disabled={busy}
+                  onClick={async () => { const p = await pickFolder(); if (p) setSourceRoot(p) }}>
+                  参照...
+                </button>
+              )}
+            </div>
           </div>
-          <div className="row" style={{ marginTop: 4 }}>
-            <button className="button" type="button" disabled={!canPreview || busy}
+
+          {/* 出力先フォルダのプレビュー表示 */}
+          {sourceRoot && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginTop: 8 }}>
+              {(['image', 'video', 'audio', 'other'] as const).map((kind) => {
+                const c = KIND_COLOR[kind]
+                const folderName = DEST_FOLDER_KEY[kind]
+                return (
+                  <div key={kind} style={{
+                    padding: '8px 12px', borderRadius: 6, border: `1px solid ${c.bg}`,
+                    background: c.bg, fontSize: 12,
+                  }}>
+                    <span style={{ fontWeight: 700, color: c.text }}>{KIND_LABEL[kind]}</span>
+                    <p style={{ margin: '2px 0 0', color: 'var(--text-muted)', fontSize: 11, wordBreak: 'break-all' }}>
+                      → …/{folderName}/
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="button" type="button" disabled={!sourceRoot || busy}
               onClick={() => previewMutation.mutate()}>
               {previewMutation.isPending ? <Spinner size={14} inline /> : null}
               プレビュー
@@ -204,7 +248,7 @@ export function SeparatePage() {
             )}
             {preview && (
               <button className="button ghost" type="button" disabled={busy}
-                onClick={() => setPreview(null)}>
+                onClick={() => setPreviewData(null)}>
                 キャンセル
               </button>
             )}
@@ -241,14 +285,21 @@ export function SeparatePage() {
                 <span className="status-dot" />
                 合計 {preview.length} 件
               </span>
-              <span style={{ fontSize: 12, color: '#79a8ff' }}>画像 {imageCount} 件</span>
-              <span style={{ fontSize: 12, color: '#c4b5fd' }}>動画 {videoCount} 件</span>
+              {((['image', 'video', 'audio', 'other'] as const)).map((kind) => {
+                const count = preview.filter((i) => i.kind === kind).length
+                if (!count) return null
+                return (
+                  <span key={kind} style={{ fontSize: 12, color: KIND_COLOR[kind].text }}>
+                    {KIND_LABEL[kind]} {count} 件
+                  </span>
+                )
+              })}
             </div>
             <div className="toolbar-group">
-              {(['all', 'image', 'video'] as const).map((f) => (
-                <button key={f} className={`button ${filter === f ? '' : 'ghost'}`}
-                  onClick={() => setFilter(f)} style={{ padding: '4px 10px', fontSize: 12 }}>
-                  {f === 'all' ? 'すべて' : f === 'image' ? '画像のみ' : '動画のみ'}
+              {FILTER_BUTTONS.map((f) => (
+                <button key={f.key} className={`button ${filter === f.key ? '' : 'ghost'}`}
+                  onClick={() => setFilter(f.key)} style={{ padding: '4px 10px', fontSize: 12 }}>
+                  {f.label}
                 </button>
               ))}
             </div>
@@ -262,7 +313,7 @@ export function SeparatePage() {
       {!preview && !previewMutation.isPending && (
         <article className="card" style={{ textAlign: 'center', padding: 32, flexShrink: 0 }}>
           <p className="muted">
-            3つのフォルダを指定して「プレビュー」を押すと、移動予定の一覧が表示されます。<br />
+            対象フォルダを指定して「プレビュー」を押すと、移動予定の一覧が表示されます。<br />
             内容を確認してから「確定して移動する」で実行してください。
           </p>
         </article>

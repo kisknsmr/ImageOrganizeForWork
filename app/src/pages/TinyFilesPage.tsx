@@ -1,6 +1,6 @@
 import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FileDetailPane } from '../components/FileDetailPane'
 import { QueryState } from '../components/QueryState'
@@ -25,12 +25,46 @@ const PRESETS = [
   { label: '1 MB', value: 1024 * 1024 },
 ]
 
+type CardProps = {
+  item: FileItem
+  selected: boolean
+  previewing: boolean
+  busy: boolean
+  onToggle: (id: number) => void
+  onPreview: (item: FileItem) => void
+  onDragStart: (id: number) => (e: React.DragEvent<HTMLElement>) => void
+}
+
+const TinyCard = memo(function TinyCard({
+  item, selected, previewing, busy, onToggle, onPreview, onDragStart,
+}: CardProps) {
+  return (
+    <label
+      className={`thumb-item checkbox-card ${selected ? 'selected' : ''} ${previewing ? 'previewing' : ''}`}
+      draggable
+      onDragStart={onDragStart(item.id)}
+      onClick={() => onPreview(item)}
+    >
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={() => onToggle(item.id)}
+        disabled={busy}
+        onClick={(e) => e.stopPropagation()}
+      />
+      <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+      <span>{item.filename}</span>
+      <p className="thumb-meta">{formatBytes(item.size)}</p>
+    </label>
+  )
+})
+
 export function TinyFilesPage() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const view = useViewMode('tiny')
   const [maxSize, setMaxSize] = useState(50 * 1024)
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
 
   const tiny = useQuery({
@@ -39,13 +73,23 @@ export function TinyFilesPage() {
   })
   const items = tiny.data?.items ?? []
 
-  const toggle = (id: number) => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  }
+  const toggle = useCallback((id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }, [])
 
-  const toggleAll = () => {
-    setSelectedIds(selectedIds.length === items.length ? [] : items.map((i) => i.id))
-  }
+  const toggleAll = useCallback(() => {
+    setSelectedIds((prev) =>
+      prev.size === items.length ? new Set() : new Set(items.map((i) => i.id))
+    )
+  }, [items])
+
+  const handlePreview = useCallback((item: FileItem) => {
+    setPreviewItem(item)
+  }, [])
 
   const trashMutation = useMutation({
     mutationFn: (ids: number[]) => api.batchMoveToTrash(ids),
@@ -56,7 +100,7 @@ export function TinyFilesPage() {
       } else {
         toast.success(`${res.moved} 件をゴミ箱へ送りました`, 'Tiny Files')
       }
-      setSelectedIds([])
+      setSelectedIds(new Set())
       setPreviewItem(null)
       await tiny.refetch()
       queryClient.invalidateQueries({ queryKey: ['stats'] })
@@ -66,9 +110,10 @@ export function TinyFilesPage() {
     },
   })
 
-  const onDragStart = useDraggableFiles(selectedIds)
+  const selectedArray = useMemo(() => Array.from(selectedIds), [selectedIds])
+  const onDragStart = useDraggableFiles(selectedArray)
   const busy = trashMutation.isPending
-  const allSelected = items.length > 0 && selectedIds.length === items.length
+  const allSelected = items.length > 0 && selectedIds.size === items.length
 
   return (
     <section className="page">
@@ -82,7 +127,7 @@ export function TinyFilesPage() {
             <span className="status-dot" />
             Candidates: {items.length}
           </span>
-          <span className="muted">Selected: {selectedIds.length}</span>
+          <span className="muted">Selected: {selectedIds.size}</span>
         </div>
         <div className="toolbar-group">
           <span className="muted" style={{ whiteSpace: 'nowrap' }}>上限サイズ:</span>
@@ -90,7 +135,7 @@ export function TinyFilesPage() {
             <button
               key={p.value}
               className={`button ${maxSize === p.value ? '' : 'ghost'}`}
-              onClick={() => { setMaxSize(p.value); setSelectedIds([]) }}
+              onClick={() => { setMaxSize(p.value); setSelectedIds(new Set()) }}
               disabled={busy}
             >
               {p.label}
@@ -105,11 +150,11 @@ export function TinyFilesPage() {
           </button>
           <button
             className="button danger"
-            disabled={busy || selectedIds.length === 0}
-            onClick={() => trashMutation.mutate(selectedIds)}
+            disabled={busy || selectedIds.size === 0}
+            onClick={() => trashMutation.mutate(selectedArray)}
           >
             {trashMutation.isPending ? <Spinner size={14} inline /> : null}
-            選択をゴミ箱へ ({selectedIds.length})
+            選択をゴミ箱へ ({selectedIds.size})
           </button>
         </div>
       </div>
@@ -121,31 +166,23 @@ export function TinyFilesPage() {
       />
       <div className="gallery-layout with-folder">
         <div className="pane-scroll">
-        <div
-          className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
-          style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
-        >
-          {!tiny.isPending && !tiny.isError && items.map((item) => (
-            <label
-              key={item.id}
-              className={`thumb-item checkbox-card ${selectedIds.includes(item.id) ? 'selected' : ''} ${previewItem?.id === item.id ? 'previewing' : ''}`}
-              draggable
-              onDragStart={onDragStart(item.id)}
-              onClick={() => setPreviewItem(item)}
-            >
-              <input
-                type="checkbox"
-                checked={selectedIds.includes(item.id)}
-                onChange={() => toggle(item.id)}
-                disabled={busy}
-                onClick={(e) => e.stopPropagation()}
+          <div
+            className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
+            style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
+          >
+            {!tiny.isPending && !tiny.isError && items.map((item) => (
+              <TinyCard
+                key={item.id}
+                item={item}
+                selected={selectedIds.has(item.id)}
+                previewing={previewItem?.id === item.id}
+                busy={busy}
+                onToggle={toggle}
+                onPreview={handlePreview}
+                onDragStart={onDragStart}
               />
-              <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
-              <span>{item.filename}</span>
-              <p className="thumb-meta">{formatBytes(item.size)}</p>
-            </label>
-          ))}
-        </div>
+            ))}
+          </div>
         </div>
         <div className="pane-scroll">
           <FileDetailPane item={previewItem} placeholder="サムネイルをクリックしてプレビュー" />

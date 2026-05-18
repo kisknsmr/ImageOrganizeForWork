@@ -25,7 +25,7 @@ from .config import config
 from .database import DatabaseManager
 from .services.scan_analyze_service import run_analyze, run_full_hash, run_scan
 from .services import organize_service
-from .services import separate_service
+from .services import separate_service, empty_folder_service
 from .utils import hamming_dist
 
 
@@ -488,8 +488,6 @@ class SaveSettingRequest(BaseModel):
 
 class SeparatePreviewRequest(BaseModel):
     source_root: str
-    image_dest: str
-    video_dest: str
 
 
 class SeparateApplyRequest(BaseModel):
@@ -500,17 +498,15 @@ class SeparateApplyRequest(BaseModel):
 def separate_preview(payload: SeparatePreviewRequest) -> dict:
     if not os.path.isdir(payload.source_root):
         raise HTTPException(status_code=400, detail=f"source_root が存在しません: {payload.source_root}")
-    items = separate_service.preview(
-        source_root=payload.source_root,
-        image_dest=payload.image_dest,
-        video_dest=payload.video_dest,
-    )
-    image_count = sum(1 for i in items if i.kind == "image")
-    video_count = sum(1 for i in items if i.kind == "video")
+    items = separate_service.preview(source_root=payload.source_root)
+    dests = separate_service._dest_roots(payload.source_root)
     return {
         "items": [{"src": i.src, "dst": i.dst, "kind": i.kind, "rel_path": i.rel_path} for i in items],
-        "image_count": image_count,
-        "video_count": video_count,
+        "image_count": sum(1 for i in items if i.kind == "image"),
+        "video_count": sum(1 for i in items if i.kind == "video"),
+        "audio_count": sum(1 for i in items if i.kind == "audio"),
+        "other_count": sum(1 for i in items if i.kind == "other"),
+        "dest_folders": dests,
     }
 
 
@@ -532,6 +528,31 @@ def separate_undo() -> dict:
 @app.get("/api/separate/undo/status")
 def separate_undo_status() -> dict:
     return {"can_undo": separate_service.can_undo()}
+
+
+# --------------------------------------------------------------------------- #
+# Empty folder endpoints
+# --------------------------------------------------------------------------- #
+
+class EmptyFolderRequest(BaseModel):
+    root: str
+
+
+@app.post("/api/empty-folders/scan")
+def empty_folders_scan(payload: EmptyFolderRequest) -> dict:
+    if not os.path.isdir(payload.root):
+        raise HTTPException(status_code=400, detail=f"フォルダが存在しません: {payload.root}")
+    folders = empty_folder_service.find_empty_folders(payload.root)
+    return {"folders": folders, "count": len(folders)}
+
+
+class EmptyFolderDeleteRequest(BaseModel):
+    folders: list[str]
+
+
+@app.post("/api/empty-folders/delete")
+def empty_folders_delete(payload: EmptyFolderDeleteRequest) -> dict:
+    return empty_folder_service.delete_empty_folders(payload.folders)
 
 
 @app.post("/api/db/reset-analysis")

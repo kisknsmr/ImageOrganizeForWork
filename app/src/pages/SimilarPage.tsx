@@ -1,6 +1,6 @@
 import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FileDetailPane } from '../components/FileDetailPane'
 import { QueryState } from '../components/QueryState'
@@ -11,13 +11,59 @@ import { useDraggableFiles } from '../hooks/useDraggableFiles'
 import { useViewMode } from '../hooks/useViewMode'
 import type { FileItem } from '../types'
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+type CardProps = {
+  item: FileItem
+  isBest: boolean
+  selected: boolean
+  previewing: boolean
+  busy: boolean
+  onToggle: (id: number) => void
+  onPreview: (item: FileItem) => void
+  onDragStart: (id: number) => (e: React.DragEvent<HTMLElement>) => void
+}
+
+const SimilarCard = memo(function SimilarCard({
+  item, isBest, selected, previewing, busy, onToggle, onPreview, onDragStart,
+}: CardProps) {
+  return (
+    <label
+      className={`thumb-item checkbox-card ${isBest ? 'best-shot' : ''} ${selected ? 'selected' : ''} ${previewing ? 'previewing' : ''}`}
+      draggable
+      onDragStart={onDragStart(item.id)}
+      onClick={() => onPreview(item)}
+      title={isBest ? 'ベストショット' : ''}
+    >
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={() => onToggle(item.id)}
+        disabled={busy}
+        onClick={(e) => e.stopPropagation()}
+      />
+      <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+      {isBest && <span className="best-badge">★</span>}
+      <span>{item.filename}</span>
+      <p className="thumb-meta">
+        {item.blur_score != null ? `blur: ${item.blur_score.toFixed(1)}` : item.extension}
+        {' · '}{formatBytes(item.size)}
+      </p>
+    </label>
+  )
+})
+
 export function SimilarPage() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const view = useViewMode('similar')
   const [distance, setDistance] = useState(5)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
 
   const similar = useQuery({
@@ -30,14 +76,22 @@ export function SimilarPage() {
     [similar.data, selectedGroupId],
   )
 
-  const toggle = (id: number) => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  }
+  const toggle = useCallback((id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }, [])
 
-  const selectAllExceptBest = () => {
+  const handlePreview = useCallback((item: FileItem) => {
+    setPreviewItem(item)
+  }, [])
+
+  const selectAllExceptBest = useCallback(() => {
     if (!currentGroup) return
-    setSelectedIds(currentGroup.items.filter((i) => i.id !== currentGroup.best_id).map((i) => i.id))
-  }
+    setSelectedIds(new Set(currentGroup.items.filter((i) => i.id !== currentGroup.best_id).map((i) => i.id)))
+  }, [currentGroup])
 
   const trashMutation = useMutation({
     mutationFn: (ids: number[]) => api.batchMoveToTrash(ids),
@@ -48,7 +102,7 @@ export function SimilarPage() {
       } else {
         toast.success(`${res.moved} 件をゴミ箱へ送りました`, 'Similar')
       }
-      setSelectedIds([])
+      setSelectedIds(new Set())
       setSelectedGroupId(null)
       setPreviewItem(null)
       await similar.refetch()
@@ -59,7 +113,8 @@ export function SimilarPage() {
     },
   })
 
-  const onDragStart = useDraggableFiles(selectedIds)
+  const selectedArray = useMemo(() => Array.from(selectedIds), [selectedIds])
+  const onDragStart = useDraggableFiles(selectedArray)
   const busy = trashMutation.isPending
   const groups = similar.data?.groups ?? []
 
@@ -75,14 +130,14 @@ export function SimilarPage() {
             <span className="status-dot" />
             {similar.isPending ? '読込中...' : `Groups: ${groups.length}`}
           </span>
-          {currentGroup && <span className="muted">Selected: {selectedIds.length} / {currentGroup.items.length}</span>}
+          {currentGroup && <span className="muted">Selected: {selectedIds.size} / {currentGroup.items.length}</span>}
         </div>
         <div className="toolbar-group">
           <label className="row" style={{ gap: 8, alignItems: 'center' }}>
             <span className="muted" style={{ whiteSpace: 'nowrap' }}>類似度: {distance}</span>
             <input
               type="range" min={1} max={25} value={distance}
-              onChange={(e) => { setDistance(Number(e.target.value)); setSelectedGroupId(null); setSelectedIds([]) }}
+              onChange={(e) => { setDistance(Number(e.target.value)); setSelectedGroupId(null); setSelectedIds(new Set()) }}
               style={{ width: 120 }}
             />
           </label>
@@ -95,11 +150,11 @@ export function SimilarPage() {
           </button>
           <button
             className="button danger"
-            disabled={busy || selectedIds.length === 0}
-            onClick={() => trashMutation.mutate(selectedIds)}
+            disabled={busy || selectedIds.size === 0}
+            onClick={() => trashMutation.mutate(selectedArray)}
           >
             {trashMutation.isPending ? <Spinner size={14} inline /> : null}
-            選択をゴミ箱へ ({selectedIds.length})
+            選択をゴミ箱へ ({selectedIds.size})
           </button>
         </div>
       </div>
@@ -120,7 +175,7 @@ export function SimilarPage() {
               <button
                 key={group.id}
                 className={`group-picker-item card selectable ${selectedGroupId === group.id ? 'selected' : ''}`}
-                onClick={() => { setSelectedGroupId(group.id); setSelectedIds([]); setPreviewItem(null) }}
+                onClick={() => { setSelectedGroupId(group.id); setSelectedIds(new Set()); setPreviewItem(null) }}
               >
                 {group.best_id && (
                   <img
@@ -149,33 +204,19 @@ export function SimilarPage() {
                 className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
                 style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
               >
-                {currentGroup.items.map((item) => {
-                  const isBest = item.id === currentGroup.best_id
-                  return (
-                    <label
-                      key={item.id}
-                      className={`thumb-item checkbox-card ${isBest ? 'best-shot' : ''} ${selectedIds.includes(item.id) ? 'selected' : ''} ${previewItem?.id === item.id ? 'previewing' : ''}`}
-                      draggable
-                      onDragStart={onDragStart(item.id)}
-                      onClick={() => setPreviewItem(item)}
-                      title={isBest ? 'ベストショット' : ''}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(item.id)}
-                        onChange={() => toggle(item.id)}
-                        disabled={busy}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                      <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
-                      {isBest && <span className="best-badge">★</span>}
-                      <span>{item.filename}</span>
-                      <p className="thumb-meta">
-                        {item.blur_score != null ? `blur: ${item.blur_score.toFixed(1)}` : item.extension}
-                      </p>
-                    </label>
-                  )
-                })}
+                {currentGroup.items.map((item) => (
+                  <SimilarCard
+                    key={item.id}
+                    item={item}
+                    isBest={item.id === currentGroup.best_id}
+                    selected={selectedIds.has(item.id)}
+                    previewing={previewItem?.id === item.id}
+                    busy={busy}
+                    onToggle={toggle}
+                    onPreview={handlePreview}
+                    onDragStart={onDragStart}
+                  />
+                ))}
               </div>
             </>
           )}

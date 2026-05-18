@@ -8,6 +8,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   })
   if (!res.ok) {
+    let body: string
+    try {
+      body = await res.text()
+    } catch {
+      body = '(レスポンスボディの取得に失敗)'
+    }
+    console.error(`[API] ${init?.method ?? 'GET'} ${path} → ${res.status} ${res.statusText}\n${body}`)
     throw new Error(`${res.status} ${res.statusText}`)
   }
   return (await res.json()) as T
@@ -71,9 +78,9 @@ export const api = {
   previewUrl: (id: number) => `${API_BASE}/api/files/${id}/preview`,
   thumbnailUrl: (id: number) => `${API_BASE}/api/files/${id}/thumbnail`,
 
-  // Separate (画像・動画分離)
-  separatePreview: (params: { source_root: string; image_dest: string; video_dest: string }) =>
-    request<{ items: SeparateItem[]; image_count: number; video_count: number }>('/api/separate/preview', {
+  // Separate (画像・動画・音声・その他分離)
+  separatePreview: (params: { source_root: string }) =>
+    request<{ items: SeparateItem[]; image_count: number; video_count: number; audio_count: number; other_count: number; dest_folders: Record<string, string> }>('/api/separate/preview', {
       method: 'POST', body: JSON.stringify(params),
     }),
   separateApply: (items: SeparateItem[]) =>
@@ -85,6 +92,16 @@ export const api = {
   separateUndo: () =>
     request<{ ok: boolean; restored?: number; failed?: string[]; message?: string }>('/api/separate/undo', { method: 'POST' }),
   separateUndoStatus: () => request<{ can_undo: boolean }>('/api/separate/undo/status'),
+
+  // Empty folders
+  emptyFoldersScan: (root: string) =>
+    request<{ folders: string[]; count: number }>('/api/empty-folders/scan', {
+      method: 'POST', body: JSON.stringify({ root }),
+    }),
+  emptyFoldersDelete: (folders: string[]) =>
+    request<{ deleted: number; failed: string[] }>('/api/empty-folders/delete', {
+      method: 'POST', body: JSON.stringify({ folders }),
+    }),
 
   // DB management
   dbResetAnalysis: () => request<{ ok: boolean; reset: number }>('/api/db/reset-analysis', { method: 'POST' }),

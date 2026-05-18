@@ -1,6 +1,6 @@
 import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
 import { QueryState } from '../components/QueryState'
@@ -10,12 +10,34 @@ import { useDraggableFiles } from '../hooks/useDraggableFiles'
 import { useViewMode } from '../hooks/useViewMode'
 import type { FileItem } from '../types'
 
+type CardProps = {
+  item: FileItem
+  selected: boolean
+  onDragStart: (id: number) => (e: React.DragEvent<HTMLElement>) => void
+  onClick: (item: FileItem, e: React.MouseEvent) => void
+}
+
+const GalleryCard = memo(function GalleryCard({ item, selected, onDragStart, onClick }: CardProps) {
+  return (
+    <button
+      className={`thumb-item ${selected ? 'selected' : ''}`}
+      draggable
+      onDragStart={onDragStart(item.id)}
+      onClick={(e) => onClick(item, e)}
+    >
+      <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+      <span>{item.filename}</span>
+      <p className="thumb-meta">{item.content_type ?? item.extension}</p>
+    </button>
+  )
+})
+
 export function GalleryPage() {
   const toast = useToast()
   const view = useViewMode('gallery')
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<FileItem | null>(null)
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [showFolderPanel, setShowFolderPanel] = useState(false)
   const params = useMemo(() => {
     const p = new URLSearchParams()
@@ -40,7 +62,7 @@ export function GalleryPage() {
       } else {
         toast.success(`${res.moved} 件を「${folderLabel}」へ移動しました`, 'Gallery')
       }
-      setSelectedIds([])
+      setSelectedIds(new Set())
       await files.refetch()
     },
     onError: (error) => {
@@ -48,11 +70,20 @@ export function GalleryPage() {
     },
   })
 
-  const onDragStart = useDraggableFiles(selectedIds)
+  const selectedArray = useMemo(() => Array.from(selectedIds), [selectedIds])
+  const onDragStart = useDraggableFiles(selectedArray)
 
-  const toggleSelected = (id: number) => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  }
+  const handleCardClick = useCallback((item: FileItem, e: React.MouseEvent) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        next.has(item.id) ? next.delete(item.id) : next.add(item.id)
+        return next
+      })
+    } else {
+      setSelected(item)
+    }
+  }, [])
 
   const handleDrop = (folder: string, ids: number[]) => {
     moveMutation.mutate({ ids, folder })
@@ -77,7 +108,7 @@ export function GalleryPage() {
             Loaded {items.length} items
           </span>
           <span className="muted">Page {page}</span>
-          {selectedIds.length > 0 && <span className="muted">Selected: {selectedIds.length}</span>}
+          {selectedIds.size > 0 && <span className="muted">Selected: {selectedIds.size}</span>}
         </div>
         <div className="toolbar-group">
           <ViewControls
@@ -119,28 +150,15 @@ export function GalleryPage() {
               className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
               style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
             >
-              {items.map((item) => {
-                const isSelected = selectedIds.includes(item.id)
-                return (
-                  <button
-                    key={item.id}
-                    className={`thumb-item ${isSelected ? 'selected' : ''}`}
-                    draggable
-                    onDragStart={onDragStart(item.id)}
-                    onClick={(e) => {
-                      if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                        toggleSelected(item.id)
-                      } else {
-                        setSelected(item)
-                      }
-                    }}
-                  >
-                    <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
-                    <span>{item.filename}</span>
-                    <p className="thumb-meta">{item.content_type ?? item.extension}</p>
-                  </button>
-                )
-              })}
+              {items.map((item) => (
+                <GalleryCard
+                  key={item.id}
+                  item={item}
+                  selected={selectedIds.has(item.id)}
+                  onDragStart={onDragStart}
+                  onClick={handleCardClick}
+                />
+              ))}
             </div>
           )}
         </div>

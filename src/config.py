@@ -30,12 +30,24 @@ class AppConfig:
 
     # サポート画像拡張子
     IMAGE_EXTENSIONS: Set[str] = frozenset({
-        '.jpg', '.jpeg', '.png', '.heic', '.webp'
+        '.jpg', '.jpeg', '.png', '.heic', '.heif', '.webp',
+        '.gif', '.bmp', '.tiff', '.tif', '.raw', '.arw', '.cr2', '.cr3',
+        '.nef', '.nrw', '.orf', '.rw2', '.dng', '.pef', '.srw',
+        '.svg', '.avif',
     })
 
     # サポート動画拡張子
     VIDEO_EXTENSIONS: Set[str] = frozenset({
-        '.mp4', '.mov'
+        '.mp4', '.mov', '.mkv', '.avi', '.wmv', '.flv', '.webm',
+        '.m4v', '.3gp', '.3g2', '.ts', '.mts', '.m2ts', '.vob',
+        '.mpg', '.mpeg', '.rm', '.rmvb', '.divx', '.f4v',
+    })
+
+    # サポート音声拡張子
+    AUDIO_EXTENSIONS: Set[str] = frozenset({
+        '.mp3', '.aac', '.wav', '.flac', '.m4a', '.ogg', '.wma',
+        '.aiff', '.aif', '.opus', '.ape', '.dsf', '.dff', '.alac',
+        '.mid', '.midi', '.amr', '.caf',
     })
 
     # 全サポート拡張子

@@ -1,17 +1,41 @@
 import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { QueryState } from '../components/QueryState'
 import { Spinner } from '../components/Spinner'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useViewMode } from '../hooks/useViewMode'
+import type { FileItem } from '../types'
+
+type CardProps = {
+  item: FileItem
+  selected: boolean
+  busy: boolean
+  onToggle: (id: number) => void
+}
+
+const TrashCard = memo(function TrashCard({ item, selected, busy, onToggle }: CardProps) {
+  return (
+    <label className="thumb-item checkbox-card">
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={() => onToggle(item.id)}
+        disabled={busy}
+      />
+      <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+      <span>{item.filename}</span>
+      <p className="thumb-meta">{item.content_type ?? item.extension}</p>
+    </label>
+  )
+})
 
 export function TrashPage() {
   const toast = useToast()
   const view = useViewMode('trash')
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [destinationFolder, setDestinationFolder] = useState('')
 
   const trash = useQuery({
@@ -20,9 +44,13 @@ export function TrashPage() {
   })
   const folders = useQuery({ queryKey: ['folders'], queryFn: api.folders })
 
-  const toggle = (id: number) => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  }
+  const toggle = useCallback((id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }, [])
 
   const restoreMutation = useMutation({
     mutationFn: ({ ids, folder }: { ids: number[]; folder: string }) => api.batchMoveFile(ids, folder),
@@ -33,7 +61,7 @@ export function TrashPage() {
       } else {
         toast.success(`${res.moved} 件を復元しました`, 'Trash')
       }
-      setSelectedIds([])
+      setSelectedIds(new Set())
       await trash.refetch()
     },
     onError: (error) => {
@@ -61,7 +89,7 @@ export function TrashPage() {
       } else {
         toast.success(`${ok} 件をDBから削除しました`, 'Trash')
       }
-      setSelectedIds([])
+      setSelectedIds(new Set())
       await trash.refetch()
     },
     onError: (error) => {
@@ -97,7 +125,7 @@ export function TrashPage() {
       } else {
         toast.success(`${deleted} 件を完全削除しました`, 'Trash')
       }
-      setSelectedIds([])
+      setSelectedIds(new Set())
       await trash.refetch()
     },
     onError: (error) => {
@@ -105,20 +133,22 @@ export function TrashPage() {
     },
   })
 
+  const selectedArray = useMemo(() => Array.from(selectedIds), [selectedIds])
+
   const restoreSelected = () => {
-    if (!selectedIds.length || !destinationFolder) return
-    restoreMutation.mutate({ ids: selectedIds, folder: destinationFolder })
+    if (!selectedIds.size || !destinationFolder) return
+    restoreMutation.mutate({ ids: selectedArray, folder: destinationFolder })
   }
 
   const removeFromDbSelected = () => {
-    if (!selectedIds.length) return
-    removeFromDbMutation.mutate(selectedIds)
+    if (!selectedIds.size) return
+    removeFromDbMutation.mutate(selectedArray)
   }
 
   const permanentDeleteSelected = () => {
-    if (!selectedIds.length) return
-    if (!window.confirm(`${selectedIds.length} 件を完全削除しますか？この操作は元に戻せません。`)) return
-    permanentDeleteMutation.mutate(selectedIds)
+    if (!selectedIds.size) return
+    if (!window.confirm(`${selectedIds.size} 件を完全削除しますか？この操作は元に戻せません。`)) return
+    permanentDeleteMutation.mutate(selectedArray)
   }
 
   const busy =
@@ -136,7 +166,7 @@ export function TrashPage() {
             <span className="status-dot" />
             Items: {trash.data?.total ?? 0}
           </span>
-          <span className="muted">Selected: {selectedIds.length}</span>
+          <span className="muted">Selected: {selectedIds.size}</span>
         </div>
         <div className="toolbar-group">
           <ViewControls
@@ -174,15 +204,15 @@ export function TrashPage() {
           </select>
           <button
             className="button"
-            disabled={busy || !selectedIds.length || !destinationFolder}
+            disabled={busy || !selectedIds.size || !destinationFolder}
             onClick={restoreSelected}
           >
             {restoreMutation.isPending ? <Spinner size={14} inline /> : null}
-            復元 ({selectedIds.length})
+            復元 ({selectedIds.size})
           </button>
           <button
             className="button secondary"
-            disabled={busy || !selectedIds.length}
+            disabled={busy || !selectedIds.size}
             onClick={removeFromDbSelected}
           >
             {removeFromDbMutation.isPending ? <Spinner size={14} inline /> : null}
@@ -190,7 +220,7 @@ export function TrashPage() {
           </button>
           <button
             className="button danger"
-            disabled={busy || !selectedIds.length}
+            disabled={busy || !selectedIds.size}
             onClick={permanentDeleteSelected}
           >
             {permanentDeleteMutation.isPending ? <Spinner size={14} inline /> : null}
@@ -205,17 +235,13 @@ export function TrashPage() {
         {!trash.isPending &&
           !trash.isError &&
           (trash.data?.items ?? []).slice(0, 80).map((item) => (
-            <label key={item.id} className="thumb-item checkbox-card">
-              <input
-                type="checkbox"
-                checked={selectedIds.includes(item.id)}
-                onChange={() => toggle(item.id)}
-                disabled={busy}
-              />
-              <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
-              <span>{item.filename}</span>
-              <p className="thumb-meta">{item.content_type ?? item.extension}</p>
-            </label>
+            <TrashCard
+              key={item.id}
+              item={item}
+              selected={selectedIds.has(item.id)}
+              busy={busy}
+              onToggle={toggle}
+            />
           ))}
       </div>
     </section>

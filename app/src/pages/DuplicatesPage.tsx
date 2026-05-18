@@ -1,6 +1,6 @@
 import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FileDetailPane } from '../components/FileDetailPane'
 import { QueryState } from '../components/QueryState'
@@ -11,12 +11,45 @@ import { useDraggableFiles } from '../hooks/useDraggableFiles'
 import { useViewMode } from '../hooks/useViewMode'
 import type { FileItem } from '../types'
 
+type CardProps = {
+  item: FileItem
+  selected: boolean
+  previewing: boolean
+  busy: boolean
+  onToggle: (id: number) => void
+  onPreview: (item: FileItem) => void
+  onDragStart: (id: number) => (e: React.DragEvent<HTMLElement>) => void
+}
+
+const DuplicateCard = memo(function DuplicateCard({
+  item, selected, previewing, busy, onToggle, onPreview, onDragStart,
+}: CardProps) {
+  return (
+    <label
+      className={`thumb-item checkbox-card ${selected ? 'selected' : ''} ${previewing ? 'previewing' : ''}`}
+      draggable
+      onDragStart={onDragStart(item.id)}
+      onClick={() => onPreview(item)}
+    >
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={() => onToggle(item.id)}
+        disabled={busy}
+        onClick={(e) => e.stopPropagation()}
+      />
+      <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+      <span>{item.filename}</span>
+    </label>
+  )
+})
+
 export function DuplicatesPage() {
   const toast = useToast()
   const view = useViewMode('duplicates')
   const [useFullHash, setUseFullHash] = useState(false)
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
 
   const duplicates = useQuery({
@@ -29,14 +62,22 @@ export function DuplicatesPage() {
     [duplicates.data, selectedGroup],
   )
 
-  const toggle = (id: number) => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  }
+  const toggle = useCallback((id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }, [])
 
-  const selectAllExceptFirst = () => {
+  const handlePreview = useCallback((item: FileItem) => {
+    setPreviewItem(item)
+  }, [])
+
+  const selectAllExceptFirst = useCallback(() => {
     if (!currentGroup) return
-    setSelectedIds(currentGroup.items.slice(1).map((i) => i.id))
-  }
+    setSelectedIds(new Set(currentGroup.items.slice(1).map((i) => i.id)))
+  }, [currentGroup])
 
   const trashMutation = useMutation({
     mutationFn: (ids: number[]) => api.batchMoveToTrash(ids),
@@ -47,7 +88,7 @@ export function DuplicatesPage() {
       } else {
         toast.success(`${res.moved} 件をゴミ箱へ送りました`, 'Duplicates')
       }
-      setSelectedIds([])
+      setSelectedIds(new Set())
       setPreviewItem(null)
       await duplicates.refetch()
     },
@@ -71,7 +112,8 @@ export function DuplicatesPage() {
     },
   })
 
-  const onDragStart = useDraggableFiles(selectedIds)
+  const selectedArray = useMemo(() => Array.from(selectedIds), [selectedIds])
+  const onDragStart = useDraggableFiles(selectedArray)
   const busy = trashMutation.isPending
 
   return (
@@ -88,7 +130,7 @@ export function DuplicatesPage() {
             {duplicates.isPending ? '読込中...' : `${duplicates.data?.groups.length ?? 0} groups`}
           </span>
           {currentGroup && (
-            <span className="muted">Selected: {selectedIds.length} / {currentGroup.items.length}</span>
+            <span className="muted">Selected: {selectedIds.size} / {currentGroup.items.length}</span>
           )}
         </div>
         <div className="toolbar-group">
@@ -119,11 +161,11 @@ export function DuplicatesPage() {
           </button>
           <button
             className="button danger"
-            disabled={busy || !selectedIds.length}
-            onClick={() => trashMutation.mutate(selectedIds)}
+            disabled={busy || selectedIds.size === 0}
+            onClick={() => trashMutation.mutate(selectedArray)}
           >
             {trashMutation.isPending ? <Spinner size={14} inline /> : null}
-            選択をゴミ箱へ ({selectedIds.length})
+            選択をゴミ箱へ ({selectedIds.size})
           </button>
         </div>
       </div>
@@ -144,7 +186,7 @@ export function DuplicatesPage() {
                 <button
                   key={group.hash}
                   className={`group-picker-item card selectable ${selectedGroup === group.hash ? 'selected' : ''}`}
-                  onClick={() => { setSelectedGroup(group.hash); setSelectedIds([]); setPreviewItem(null) }}
+                  onClick={() => { setSelectedGroup(group.hash); setSelectedIds(new Set()); setPreviewItem(null) }}
                 >
                   {group.items[0] && (
                     <img
@@ -175,23 +217,16 @@ export function DuplicatesPage() {
               style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
             >
               {currentGroup.items.map((item) => (
-                <label
+                <DuplicateCard
                   key={item.id}
-                  className={`thumb-item checkbox-card ${selectedIds.includes(item.id) ? 'selected' : ''} ${previewItem?.id === item.id ? 'previewing' : ''}`}
-                  draggable
-                  onDragStart={onDragStart(item.id)}
-                  onClick={() => setPreviewItem(item)}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.includes(item.id)}
-                    onChange={() => toggle(item.id)}
-                    disabled={busy}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                  <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
-                  <span>{item.filename}</span>
-                </label>
+                  item={item}
+                  selected={selectedIds.has(item.id)}
+                  previewing={previewItem?.id === item.id}
+                  busy={busy}
+                  onToggle={toggle}
+                  onPreview={handlePreview}
+                  onDragStart={onDragStart}
+                />
               ))}
             </div>
           )}

@@ -1,8 +1,8 @@
 """
-画像・動画分離サービス
+画像・動画・音声・その他ファイル分離サービス
 
 指定フォルダ配下を走査し、サブフォルダ構造を保ったまま
-画像と動画を別々の出力先フォルダへコピー（または移動）する。
+画像・動画・音声・その他を別々の出力先フォルダへ移動する。
 
 フロー:
   1. preview()  → 移動予定リストを返す（ファイルは動かさない）
@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 IMAGE_EXTS = config.IMAGE_EXTENSIONS
 VIDEO_EXTS = config.VIDEO_EXTENSIONS
+AUDIO_EXTS = config.AUDIO_EXTENSIONS
 
 
 # --------------------------------------------------------------------------- #
@@ -34,50 +36,58 @@ VIDEO_EXTS = config.VIDEO_EXTENSIONS
 class SeparateItem:
     src: str
     dst: str
-    kind: str          # "image" | "video"
+    kind: str          # "image" | "video" | "audio" | "other"
     rel_path: str      # 元フォルダからの相対パス（表示用）
 
 
-def preview(
-    source_root: str,
-    image_dest: str,
-    video_dest: str,
-) -> list[SeparateItem]:
+DEST_FOLDER_NAMES = {
+    "image": "01_picture",
+    "video": "02_movie",
+    "audio": "03_sound",
+    "other": "04_others",
+}
+
+
+def _dest_roots(source_root: str) -> dict[str, str]:
+    """source_root と同じ階層（親フォルダ内）に作成する4フォルダのパスを返す。"""
+    parent = os.path.dirname(source_root)
+    return {kind: os.path.normpath(os.path.join(parent, name))
+            for kind, name in DEST_FOLDER_NAMES.items()}
+
+
+def preview(source_root: str) -> list[SeparateItem]:
     """
     source_root 配下を走査して移動予定リストを返す。
-    サブフォルダ構造は image_dest / video_dest の下に再現する。
-    _TrashBox フォルダは除外する。
+    出力先は source_root の親フォルダ内の picture / movie / sound / others。
+    _TrashBox フォルダおよび出力先フォルダ自体は除外する。
     """
     source_root = os.path.normpath(source_root)
-    image_dest = os.path.normpath(image_dest)
-    video_dest = os.path.normpath(video_dest)
+    dests = _dest_roots(source_root)
+    all_dest_paths = set(dests.values())
 
     items: list[SeparateItem] = []
 
     for dirpath, dirnames, filenames in os.walk(source_root):
-        # _TrashBox を除外
         dirnames[:] = [d for d in dirnames if d != config.TRASH_FOLDER_NAME]
 
-        # 出力先フォルダ自体が source_root 配下にある場合も除外
         norm_dir = os.path.normpath(dirpath)
-        if norm_dir.startswith(image_dest) or norm_dir.startswith(video_dest):
+        if any(norm_dir.startswith(d) for d in all_dest_paths):
             continue
 
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext in IMAGE_EXTS:
                 kind = "image"
-                base_dest = image_dest
             elif ext in VIDEO_EXTS:
                 kind = "video"
-                base_dest = video_dest
+            elif ext in AUDIO_EXTS:
+                kind = "audio"
             else:
-                continue
+                kind = "other"
 
             src = os.path.normpath(os.path.join(dirpath, filename))
-            # source_root からの相対パスをそのまま出力先に付ける
             rel = os.path.relpath(src, source_root)
-            dst = os.path.normpath(os.path.join(base_dest, rel))
+            dst = os.path.normpath(os.path.join(dests[kind], rel))
             items.append(SeparateItem(src=src, dst=dst, kind=kind, rel_path=rel))
 
     return items
@@ -104,8 +114,6 @@ _undo_session: Optional[_UndoSession] = None
 # --------------------------------------------------------------------------- #
 # 進捗管理
 # --------------------------------------------------------------------------- #
-
-import threading
 
 @dataclass
 class _Progress:
@@ -143,7 +151,6 @@ def get_progress() -> dict:
 def apply(items: list[dict]) -> dict:
     """
     バックグラウンドスレッドで移動を実行し、進捗を _progress に随時反映する。
-    呼び出し側は get_progress() でポーリングして進捗を取得する。
     """
     global _undo_session, _progress
 

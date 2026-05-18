@@ -44,8 +44,14 @@ const sections: NavSection[] = [
     title: 'CLEAN UP — 移動',
     items: [
       { to: '/manual', label: 'Manual sort', icon: 'manual', tooltip: '残す／捨てる・フォルダ分け' },
-      { to: '/separate', label: 'Separate', icon: 'import', tooltip: '画像と動画をフォルダ構造を保ったまま分離' },
       { to: '/smart-sort', label: 'Smart Sort', icon: 'cleanup', tooltip: 'ローカルAI（CLIP）によるフォルダ仕分け' },
+    ],
+  },
+  {
+    title: 'ORGANIZE — 整理',
+    items: [
+      { to: '/separate', label: 'Separate', icon: 'import', tooltip: '画像・動画・音声・その他を4フォルダへ分離' },
+      { to: '/empty-folders', label: 'Empty Folders', icon: 'tiny', tooltip: '空フォルダを検出して一括削除' },
     ],
   },
   {

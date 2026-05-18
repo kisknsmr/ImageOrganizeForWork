@@ -1,6 +1,6 @@
 import { ThumbnailImg } from '../components/ThumbnailImg'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
 import { QueryState } from '../components/QueryState'
@@ -9,11 +9,42 @@ import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
 import { useViewMode } from '../hooks/useViewMode'
+import type { FileItem } from '../types'
+
+type CardProps = {
+  item: FileItem
+  selected: boolean
+  busy: boolean
+  onToggle: (id: number) => void
+  onDragStart: (id: number) => (e: React.DragEvent<HTMLElement>) => void
+}
+
+const ManualSortCard = memo(function ManualSortCard({
+  item, selected, busy, onToggle, onDragStart,
+}: CardProps) {
+  return (
+    <label
+      className="thumb-item checkbox-card"
+      draggable
+      onDragStart={onDragStart(item.id)}
+    >
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={() => onToggle(item.id)}
+        disabled={busy}
+      />
+      <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+      <span>{item.filename}</span>
+      <p className="thumb-meta">{item.content_type ?? item.extension}</p>
+    </label>
+  )
+})
 
 export function ManualSortPage() {
   const toast = useToast()
   const view = useViewMode('manual-sort')
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [destinationFolder, setDestinationFolder] = useState('')
 
   const files = useQuery({
@@ -22,9 +53,13 @@ export function ManualSortPage() {
   })
   const folders = useQuery({ queryKey: ['folders'], queryFn: api.folders })
 
-  const toggle = (id: number) => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  }
+  const toggle = useCallback((id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }, [])
 
   const moveMutation = useMutation({
     mutationFn: ({ ids, folder }: { ids: number[]; folder: string }) => api.batchMoveFile(ids, folder),
@@ -36,7 +71,7 @@ export function ManualSortPage() {
       } else {
         toast.success(`${res.moved} 件を「${folderLabel}」へ移動しました`, 'Manual Sort')
       }
-      setSelectedIds([])
+      setSelectedIds(new Set())
       await files.refetch()
     },
     onError: (error) => {
@@ -53,23 +88,13 @@ export function ManualSortPage() {
       } else {
         toast.success(`${res.moved} 件をゴミ箱へ送りました`, 'Manual Sort')
       }
-      setSelectedIds([])
+      setSelectedIds(new Set())
       await files.refetch()
     },
     onError: (error) => {
       toast.error(getApiErrorMessage(error), 'ゴミ箱移動に失敗しました')
     },
   })
-
-  const moveSelected = () => {
-    if (!selectedIds.length || !destinationFolder) return
-    moveMutation.mutate({ ids: selectedIds, folder: destinationFolder })
-  }
-
-  const trashSelected = () => {
-    if (!selectedIds.length) return
-    trashMutation.mutate(selectedIds)
-  }
 
   const handleDropToFolder = (folder: string, ids: number[]) => {
     moveMutation.mutate({ ids, folder })
@@ -80,7 +105,8 @@ export function ManualSortPage() {
     setDestinationFolder(path)
   }
 
-  const onDragStart = useDraggableFiles(selectedIds)
+  const selectedArray = useMemo(() => Array.from(selectedIds), [selectedIds])
+  const onDragStart = useDraggableFiles(selectedArray)
   const busy = moveMutation.isPending || trashMutation.isPending
   const items = (files.data?.items ?? []).slice(0, 60)
 
@@ -96,7 +122,7 @@ export function ManualSortPage() {
             <span className="status-dot" />
             Files: {files.data?.total ?? 0}
           </span>
-          <span className="muted">Selected: {selectedIds.length}</span>
+          <span className="muted">Selected: {selectedIds.size}</span>
         </div>
         <div className="toolbar-group">
           <ViewControls
@@ -134,16 +160,16 @@ export function ManualSortPage() {
           </select>
           <button
             className="button"
-            disabled={busy || !selectedIds.length || !destinationFolder}
-            onClick={moveSelected}
+            disabled={busy || !selectedIds.size || !destinationFolder}
+            onClick={() => moveMutation.mutate({ ids: selectedArray, folder: destinationFolder })}
           >
             {moveMutation.isPending ? <Spinner size={14} inline /> : null}
-            選択を移動 ({selectedIds.length})
+            選択を移動 ({selectedIds.size})
           </button>
           <button
             className="button danger"
-            disabled={busy || !selectedIds.length}
-            onClick={trashSelected}
+            disabled={busy || !selectedIds.size}
+            onClick={() => trashMutation.mutate(selectedArray)}
           >
             {trashMutation.isPending ? <Spinner size={14} inline /> : null}
             選択をゴミ箱へ
@@ -152,31 +178,23 @@ export function ManualSortPage() {
       </article>
       <div className="gallery-layout with-folder">
         <div className="pane-scroll">
-        <div
-          className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
-          style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
-        >
-          {!files.isPending &&
-            !files.isError &&
-            items.map((item) => (
-              <label
-                key={item.id}
-                className="thumb-item checkbox-card"
-                draggable
-                onDragStart={onDragStart(item.id)}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedIds.includes(item.id)}
-                  onChange={() => toggle(item.id)}
-                  disabled={busy}
+          <div
+            className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
+            style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
+          >
+            {!files.isPending &&
+              !files.isError &&
+              items.map((item) => (
+                <ManualSortCard
+                  key={item.id}
+                  item={item}
+                  selected={selectedIds.has(item.id)}
+                  busy={busy}
+                  onToggle={toggle}
+                  onDragStart={onDragStart}
                 />
-                <ThumbnailImg src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
-                <span>{item.filename}</span>
-                <p className="thumb-meta">{item.content_type ?? item.extension}</p>
-              </label>
-            ))}
-        </div>
+              ))}
+          </div>
         </div>
         <FolderDropPanel
           folders={folders.data?.folders ?? []}
