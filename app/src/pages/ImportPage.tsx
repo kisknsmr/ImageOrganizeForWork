@@ -19,7 +19,12 @@ async function pickFolder(): Promise<string | null> {
 export function ImportPage() {
   const toast = useToast()
   const [rootPath, setRootPath] = useState('')
-  const status = useQuery({ queryKey: ['scanStatus'], queryFn: api.scanStatus, refetchInterval: 1000 })
+  const status = useQuery({
+    queryKey: ['scanStatus'],
+    queryFn: api.scanStatus,
+    // 実行中は細かく、待機中は控えめにポーリングする
+    refetchInterval: (query) => (query.state.data?.running ? 400 : 2000),
+  })
 
   const startScan = useMutation({
     mutationFn: async () => api.scanStart(rootPath),
@@ -50,7 +55,9 @@ export function ImportPage() {
     if (path) setRootPath(path)
   }
 
-  const busy = startScan.isPending || startAnalyze.isPending
+  // バックグラウンドでスキャン/解析が走っている間は二重起動(409)を防ぐ
+  const jobRunning = status.data?.running ?? false
+  const busy = startScan.isPending || startAnalyze.isPending || jobRunning
 
   return (
     <section className="page">
@@ -62,9 +69,14 @@ export function ImportPage() {
         <div className="toolbar-group">
           <span className="status-chip">
             <span className="status-dot" />
-            {status.data?.running ? 'Running' : 'Idle'}
+            {jobRunning ? (status.data?.kind === 'analyze' ? '解析中' : 'スキャン中') : '待機中'}
           </span>
           <span className="muted">{status.data?.percent ?? 0}%</span>
+          {(status.data?.total ?? 0) > 0 && (
+            <span className="muted">
+              {status.data?.current ?? 0}/{status.data?.total}
+            </span>
+          )}
         </div>
       </div>
       <article className="card">
@@ -119,8 +131,15 @@ export function ImportPage() {
             Start Analyze
           </button>
         </div>
-        <p className="muted">{status.data?.message ?? '待機中'}</p>
-        <progress value={status.data?.percent ?? 0} max={100} />
+        <p className="muted">
+          {status.data?.error ? `エラー: ${status.data.error}` : (status.data?.message ?? '待機中')}
+        </p>
+        {jobRunning && (status.data?.percent ?? 0) === 0 ? (
+          // 探索フェーズは総数不明のため不確定バー（value 省略でアニメーション）
+          <progress max={100} />
+        ) : (
+          <progress value={status.data?.percent ?? 0} max={100} />
+        )}
       </article>
     </section>
   )

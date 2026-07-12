@@ -51,6 +51,9 @@ def run_scan(
     emit_status(f"フォルダ走査中: {root}")
     disk_files: set[str] = set()
 
+    # 探索フェーズは総数が未知でパーセントを出せないため、
+    # 発見件数を時間ベース（約0.4秒毎）で通知して「動いている」ことを見せる。
+    last_walk_emit = time.time()
     for current_root, _dirs, files in os.walk(root):
         if stopper():
             return {"stopped": True, "registered": 0}
@@ -63,8 +66,10 @@ def run_scan(
             full_path = os.path.normpath(os.path.join(current_root, filename))
             if config.validate_path(full_path):
                 disk_files.add(full_path)
-        if len(disk_files) % 1000 == 0 and disk_files:
-            emit_status(f"発見: {len(disk_files)}...")
+        now = time.time()
+        if now - last_walk_emit >= 0.4:
+            emit_status(f"フォルダ走査中... 発見 {len(disk_files)} 件")
+            last_walk_emit = now
 
     db_files = set(os.path.normpath(p) for p in db.get_all_files())
     new_files = list(disk_files - db_files)
