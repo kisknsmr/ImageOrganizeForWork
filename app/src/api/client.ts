@@ -1,14 +1,31 @@
-import type { FileItem, LibraryStats, PagedFiles, ScanJob } from '../types'
+import type { AppSettings, FileItem, LibraryStats, PagedFiles, ScanJob } from '../types'
 
 const API_BASE = 'http://127.0.0.1:8765'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    ...init,
-  })
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+      ...init,
+    })
+  } catch (cause) {
+    throw new Error(
+      `APIサーバー(${API_BASE})に接続できません。バックエンド(uvicorn)が起動しているか確認してください。`,
+      { cause },
+    )
+  }
   if (!res.ok) {
-    throw new Error(`${res.status} ${res.statusText}`)
+    // FastAPI は失敗理由を JSON の detail に入れて返す。拾えれば表示する。
+    let detail = ''
+    try {
+      const body = (await res.clone().json()) as { detail?: unknown }
+      if (typeof body.detail === 'string') detail = body.detail
+      else if (body.detail != null) detail = JSON.stringify(body.detail)
+    } catch {
+      // JSON でない/本文なし → ステータス文言にフォールバック
+    }
+    throw new Error(detail ? `${detail} (HTTP ${res.status})` : `HTTP ${res.status} ${res.statusText}`)
   }
   return (await res.json()) as T
 }
@@ -48,6 +65,11 @@ export const api = {
     }),
   triageNext: (afterId = 0) => request<{ item: FileItem | null }>(`/api/triage/next?after_id=${afterId}`),
   blurry: (threshold = 20) => request<{ items: FileItem[] }>(`/api/blurry?threshold=${threshold}`),
+  tiny: (maxSizeKb = 10) =>
+    request<{ max_size_kb: number; items: FileItem[] }>(`/api/tiny?max_size_kb=${maxSizeKb}`),
+  settings: () => request<AppSettings>('/api/settings'),
+  updateSettings: (payload: { trash_folder?: string }) =>
+    request<AppSettings>('/api/settings', { method: 'POST', body: JSON.stringify(payload) }),
   duplicates: (useFullHash = false) =>
     request<{ groups: Array<{ hash: string; count: number; items: FileItem[] }> }>(
       `/api/duplicates?use_full_hash=${useFullHash ? 'true' : 'false'}`,

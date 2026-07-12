@@ -45,3 +45,21 @@ export type LibraryStats = {
   root_path?: string | null
 }
 
+export type AppSettings = {
+  version: string
+  root_path?: string | null
+  trash_folder: string
+  db_name: string
+  defaults: {
+    blur_threshold: number
+    similarity_threshold: number
+    max_similarity_distance: number
+    min_file_size_kb: number
+  }
+  extensions: {
+    image: string[]
+    video: string[]
+  }
+  stats: LibraryStats
+}
+

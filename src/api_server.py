@@ -17,6 +17,7 @@ from typing import Literal, Optional
 
 import cv2
 from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from PIL import Image, ImageOps
 
@@ -61,6 +62,10 @@ class BatchMoveRequest(BaseModel):
 
 class CreateFolderRequest(BaseModel):
     path: str = Field(..., min_length=1)
+
+
+class SettingsUpdateRequest(BaseModel):
+    trash_folder: Optional[str] = None
 
 
 @dataclass
@@ -126,6 +131,12 @@ class JobManager:
 db = DatabaseManager()
 jobs = JobManager()
 app = FastAPI(title="PhotoSortX API", version="3.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:1420", "http://127.0.0.1:1420", "tauri://localhost", "https://tauri.localhost"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _run_scanner(root_path: str) -> None:
@@ -420,6 +431,41 @@ def create_folder(payload: CreateFolderRequest) -> dict:
     return {"ok": True, "path": path}
 
 
+@app.get("/api/settings")
+def get_settings() -> dict:
+    return {
+        "version": app.version,
+        "root_path": db.get_setting("root_path"),
+        "trash_folder": db.get_trash_folder() or config.get_default_trash_folder(),
+        "db_name": config.DB_NAME,
+        "defaults": {
+            "blur_threshold": config.DEFAULT_BLUR_THRESHOLD,
+            "similarity_threshold": config.DEFAULT_SIMILARITY_THRESHOLD,
+            "max_similarity_distance": config.MAX_SIMILARITY_DISTANCE,
+            "min_file_size_kb": config.MIN_FILE_SIZE_THRESHOLD // 1024,
+        },
+        "extensions": {
+            "image": sorted(config.IMAGE_EXTENSIONS),
+            "video": sorted(config.VIDEO_EXTENSIONS),
+        },
+        "stats": db.get_library_stats(),
+    }
+
+
+@app.post("/api/settings")
+def update_settings(payload: SettingsUpdateRequest) -> dict:
+    if payload.trash_folder is not None:
+        folder = os.path.normpath(payload.trash_folder.strip())
+        if not folder or folder in (".", ".."):
+            raise HTTPException(status_code=400, detail="invalid trash folder path")
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"failed to create trash folder: {exc}") from exc
+        db.set_trash_folder(folder)
+    return get_settings()
+
+
 @app.get("/api/triage/next")
 def triage_next(after_id: int = Query(0, ge=0)) -> dict:
     row = db.get_next_triage_file(after_id=after_id)
@@ -443,6 +489,16 @@ def duplicates(use_full_hash: bool = False) -> dict:
 def blurry(threshold: int = Query(config.DEFAULT_BLUR_THRESHOLD, ge=1, le=1000)) -> dict:
     rows = db.get_blurry_files(threshold)
     return {"items": [db.get_file_by_id(fid) for fid, _path in rows]}
+
+
+@app.get("/api/tiny")
+def tiny_files(
+    max_size_kb: int = Query(config.MIN_FILE_SIZE_THRESHOLD // 1024, ge=1, le=1_000_000),
+) -> dict:
+    max_size = max_size_kb * 1024
+    rows = db.get_small_files(max_size)
+    items = [row for fid, _path, _size in rows if (row := db.get_file_by_id(fid))]
+    return {"max_size_kb": max_size_kb, "items": items}
 
 
 @app.get("/api/similar")
