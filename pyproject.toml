@@ -21,6 +21,13 @@ ai = [
     "torch>=2.2",
     "transformers>=4.37",
 ]
+api = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+dev = [
+    "httpx>=0.27",
+]
 
 [project.scripts]
 photosortx = "main:main"

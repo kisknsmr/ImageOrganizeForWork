@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api } from '../api/client'
 import { QueryState } from '../components/QueryState'
 import { Spinner } from '../components/Spinner'
@@ -7,20 +7,17 @@ import { getApiErrorMessage, useToast } from '../components/useToast'
 
 export function SettingsPage() {
   const toast = useToast()
-  const [trashFolder, setTrashFolder] = useState('')
+  // null = 未編集（サーバー値を表示）。編集した時だけ state に持つ
+  const [trashFolderInput, setTrashFolderInput] = useState<string | null>(null)
 
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings })
-
-  useEffect(() => {
-    if (settings.data?.trash_folder) {
-      setTrashFolder(settings.data.trash_folder)
-    }
-  }, [settings.data?.trash_folder])
+  const trashFolder = trashFolderInput ?? settings.data?.trash_folder ?? ''
 
   const saveMutation = useMutation({
     mutationFn: (folder: string) => api.updateSettings({ trash_folder: folder }),
     onSuccess: async () => {
       toast.success('設定を保存しました', 'Settings')
+      setTrashFolderInput(null)
       await settings.refetch()
     },
     onError: (error) => {
@@ -87,7 +84,7 @@ export function SettingsPage() {
               <input
                 className="input"
                 value={trashFolder}
-                onChange={(e) => setTrashFolder(e.target.value)}
+                onChange={(e) => setTrashFolderInput(e.target.value)}
                 placeholder="ゴミ箱の移動先フォルダ"
                 disabled={saveMutation.isPending}
                 style={{ flex: 1 }}

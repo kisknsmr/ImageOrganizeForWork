@@ -1,4 +1,13 @@
-import type { AppSettings, FileItem, LibraryStats, PagedFiles, ScanJob } from '../types'
+import type {
+  AppSettings,
+  FileItem,
+  LibraryStats,
+  OrganizeApplyResult,
+  OrganizeCapabilities,
+  OrganizePreview,
+  PagedFiles,
+  ScanJob,
+} from '../types'
 
 const API_BASE = 'http://127.0.0.1:8765'
 
@@ -78,6 +87,16 @@ export const api = {
     request<{ groups: Array<{ id: string; count: number; best_id: number | null; items: FileItem[] }> }>(
       `/api/similar?distance=${distance}`,
     ),
+  organizeCapabilities: () => request<OrganizeCapabilities>('/api/organize/capabilities'),
+  organizePreview: (gapHours = 6, minGroupSize = 1, maxItemsPerGroup = 8) =>
+    request<OrganizePreview>(
+      `/api/organize/preview?gap_hours=${gapHours}&min_group_size=${minGroupSize}&max_items_per_group=${maxItemsPerGroup}`,
+    ),
+  organizeApply: (destinationRoot: string, groups: Array<{ name: string; file_ids: number[] }>) =>
+    request<OrganizeApplyResult>('/api/organize/apply', {
+      method: 'POST',
+      body: JSON.stringify({ destination_root: destinationRoot, groups }),
+    }),
   previewUrl: (id: number) => `${API_BASE}/api/files/${id}/preview`,
   thumbnailUrl: (id: number) => `${API_BASE}/api/files/${id}/thumbnail`,
 }

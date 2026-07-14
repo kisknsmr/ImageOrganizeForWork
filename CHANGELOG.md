@@ -1,5 +1,13 @@
 # 更新履歴
 
+## v3.0（開発中: feature/tauri-ui）
+
+- Tauri + React + TypeScript 製の新 UI（`app/`）と FastAPI バックエンド（`src/api_server.py`）を追加
+- Import / Gallery / Triage / Duplicates / Blurry / Tiny / Similar / Manual / Trash / Settings の各画面を API 連携で実装
+- スマート整理（Smart organize）を新 UI に移植: 撮影時刻ベースのイベントグルーピング → グループ名編集 → フォルダ一括整理（`/api/organize/*`）
+- `pyproject.toml` にエクストラ依存を追加（`api`: fastapi/uvicorn、`dev`: httpx）
+- organize サービス・API の自動テストを追加（計 108 テスト）
+
 ## v2.3
 
 - プロジェクト構造の整理（`src/` パッケージに config / database / core を集約）

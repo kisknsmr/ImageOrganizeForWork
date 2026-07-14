@@ -46,7 +46,7 @@ const sections: NavSection[] = [
   {
     title: 'SMART',
     items: [
-      { to: '/ai-organize', label: 'AI organize', icon: 'ai', tooltip: 'CLIPによるスマート整理' },
+      { to: '/ai-organize', label: 'Smart organize', icon: 'ai', tooltip: 'イベント単位のスマート整理' },
     ],
   },
 ]

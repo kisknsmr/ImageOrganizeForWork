@@ -23,6 +23,7 @@ from PIL import Image, ImageOps
 
 from .config import config
 from .database import DatabaseManager
+from .services import organize_service
 from .services.scan_analyze_service import run_analyze, run_scan
 from .utils import hamming_dist
 
@@ -66,6 +67,16 @@ class CreateFolderRequest(BaseModel):
 
 class SettingsUpdateRequest(BaseModel):
     trash_folder: Optional[str] = None
+
+
+class OrganizeApplyGroup(BaseModel):
+    name: str = Field(..., min_length=1)
+    file_ids: list[int] = Field(..., min_length=1)
+
+
+class OrganizeApplyRequest(BaseModel):
+    destination_root: str = Field(..., min_length=1)
+    groups: list[OrganizeApplyGroup] = Field(..., min_length=1)
 
 
 @dataclass
@@ -521,6 +532,47 @@ def similar_best(group_id: str) -> dict:
     if not best:
         raise HTTPException(status_code=404, detail="group not found")
     return {"best": best}
+
+
+@app.get("/api/organize/capabilities")
+def organize_capabilities() -> dict:
+    return organize_service.capabilities()
+
+
+@app.get("/api/organize/preview")
+def organize_preview(
+    gap_hours: float = Query(6.0, ge=0.1, le=168.0),
+    min_group_size: int = Query(1, ge=1, le=10000),
+    max_items_per_group: int = Query(8, ge=1, le=100),
+) -> dict:
+    groups = organize_service.build_time_groups(
+        db,
+        gap_hours=gap_hours,
+        min_group_size=min_group_size,
+        max_items_per_group=max_items_per_group,
+    )
+    return {"gap_hours": gap_hours, "min_group_size": min_group_size, "groups": groups}
+
+
+@app.post("/api/organize/apply")
+def organize_apply(payload: OrganizeApplyRequest) -> dict:
+    root = os.path.normpath(payload.destination_root)
+    parent = os.path.dirname(root) or root
+    if not os.path.isdir(root) and not os.path.isdir(parent):
+        raise HTTPException(status_code=400, detail="destination_root（または親フォルダ）が存在しません")
+    try:
+        os.makedirs(root, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"整理先フォルダを作成できません: {exc}") from exc
+    if jobs.snapshot()["running"]:
+        raise HTTPException(status_code=409, detail="スキャン/解析の実行中は整理を適用できません")
+    result = organize_service.apply_groups(
+        db,
+        destination_root=root,
+        groups=[group.model_dump() for group in payload.groups],
+        status_cb=jobs.set_status,
+    )
+    return {"ok": True, **result}
 
 
 @app.websocket("/ws/progress")

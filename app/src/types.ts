@@ -45,6 +45,36 @@ export type LibraryStats = {
   root_path?: string | null
 }
 
+export type OrganizeGroup = {
+  id: string
+  suggested_name: string
+  start_time: string | null
+  end_time: string | null
+  count: number
+  file_ids: number[]
+  items: FileItem[]
+}
+
+export type OrganizePreview = {
+  gap_hours: number
+  min_group_size: number
+  groups: OrganizeGroup[]
+}
+
+export type OrganizeCapabilities = {
+  time: boolean
+  content: boolean
+  hybrid: boolean
+  ai_dependencies_installed: boolean
+}
+
+export type OrganizeApplyResult = {
+  ok: boolean
+  moved: number
+  failed_ids: number[]
+  folders: Array<{ name: string; path: string; moved: number; failed_ids: number[]; error?: string }>
+}
+
 export type AppSettings = {
   version: string
   root_path?: string | null
