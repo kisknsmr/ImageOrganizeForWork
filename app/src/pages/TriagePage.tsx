@@ -27,6 +27,43 @@ export function TriagePage() {
 
   const folders = useQuery({ queryKey: ['folders'], queryFn: api.folders })
 
+  // Discard 判定は triage_status を書くだけなので、回収する導線をここに置く
+  const discarded = useQuery({
+    queryKey: ['files', 'discard'],
+    queryFn: () => api.filesByTriage('discard'),
+  })
+  const discardedTotal = discarded.data?.total ?? 0
+  const discardedItems = discarded.data?.items ?? []
+
+  const trashDiscardedMutation = useMutation({
+    mutationFn: (ids: number[]) => api.batchMoveToTrash(ids),
+    onSuccess: async (res) => {
+      const failed = res.failed_ids?.length ?? 0
+      if (failed > 0) {
+        toast.warning(`ゴミ箱へ: ${res.moved} 件 / 失敗: ${failed} 件`, 'Triage')
+      } else {
+        toast.success(`Discard した ${res.moved} 件をゴミ箱へ送りました`, 'Triage')
+      }
+      await discarded.refetch()
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+    onError: (error) => {
+      toast.error(getApiErrorMessage(error), 'ゴミ箱移動に失敗しました')
+    },
+  })
+
+  const trashDiscarded = () => {
+    if (!discardedItems.length || trashDiscardedMutation.isPending) return
+    const message =
+      `Discard 判定した ${discardedItems.length} 件をゴミ箱へ移動します。` +
+      (discardedTotal > discardedItems.length
+        ? `\n（全 ${discardedTotal} 件のうち先頭 ${discardedItems.length} 件。残りは再実行してください）`
+        : '') +
+      '\nよろしいですか？'
+    if (!window.confirm(message)) return
+    trashDiscardedMutation.mutate(discardedItems.map((item) => item.id))
+  }
+
   const triageMutation = useMutation({
     mutationFn: ({ id, action }: { id: number; action: TriageAction | null }) => api.triage(id, action),
     onError: (error) => {
@@ -60,6 +97,7 @@ export function TriagePage() {
       setLastId(target.id)
       toast.success(`${target.filename} を ${ACTION_LABEL[action]}`, 'Triage')
       queryClient.invalidateQueries({ queryKey: ['stats'] })
+      queryClient.invalidateQueries({ queryKey: ['files', 'discard'] })
     } catch {
       // handled by onError
     }
@@ -78,6 +116,7 @@ export function TriagePage() {
       setLastId(Math.max(0, item.id - 1))
       toast.success('1 件取り消しました', 'Undo')
       queryClient.invalidateQueries({ queryKey: ['stats'] })
+      queryClient.invalidateQueries({ queryKey: ['files', 'discard'] })
     } catch {
       // handled by onError
     }
@@ -125,11 +164,21 @@ export function TriagePage() {
             {busy ? 'Working...' : 'Ready'}
           </span>
           <span className="muted">Undo history: {history.length}</span>
+          <span className="muted">Discard 済み: {discardedTotal} 件</span>
         </div>
         <div className="toolbar-group">
           <button className="button ghost" onClick={undo} disabled={busy || !history.length}>
             {busy ? <Spinner size={14} inline /> : null}
             Undo (Ctrl+Z)
+          </button>
+          <button
+            className="button danger"
+            onClick={trashDiscarded}
+            disabled={busy || trashDiscardedMutation.isPending || !discardedTotal}
+            title="Discard 判定したファイルをまとめてゴミ箱へ移動します"
+          >
+            {trashDiscardedMutation.isPending ? <Spinner size={14} inline /> : null}
+            Discard をゴミ箱へ ({discardedTotal})
           </button>
         </div>
       </div>
@@ -174,6 +223,8 @@ export function TriagePage() {
         </article>
         <FolderDropPanel
           folders={folders.data?.folders ?? []}
+          libraryRoot={folders.data?.root_path}
+          counts={folders.data?.counts}
           onDropFiles={handleDropToFolder}
           onFolderCreated={handleFolderCreated}
           rootPath={current?.path ? current.path.substring(0, current.path.lastIndexOf(current.path.includes('\\') ? '\\' : '/')) : undefined}

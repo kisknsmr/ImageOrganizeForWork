@@ -7,6 +7,7 @@ import {
   HomeIcon,
   ImportIcon,
   ManualSortIcon,
+  ResetIcon,
   SettingsIcon,
   SimilarIcon,
   TinyFileIcon,
@@ -26,6 +27,7 @@ export const NAV_ICON_MAP = {
   cleanup: CleanupIcon,
   trash: TrashIcon,
   settings: SettingsIcon,
+  reset: ResetIcon,
 } as const
 
 export type NavIconName = keyof typeof NAV_ICON_MAP

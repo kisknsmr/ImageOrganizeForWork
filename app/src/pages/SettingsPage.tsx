@@ -42,35 +42,35 @@ export function SettingsPage() {
         </div>
       </div>
 
-      <article className="card">
-        <QueryState
-          isLoading={settings.isPending}
-          isError={settings.isError}
-          error={settings.error}
-          isEmpty={false}
-          loadingMessage="設定を読み込み中..."
-        />
-      </article>
+      {/* QueryState は該当状態のときだけ描画されるので、空カードで包まない */}
+      <QueryState
+        isLoading={settings.isPending}
+        isError={settings.isError}
+        error={settings.error}
+        isEmpty={false}
+        loadingMessage="設定を読み込み中..."
+      />
+
 
       {data && (
         <>
           <article className="card">
-            <h3>ライブラリ</h3>
+            <h3>Library</h3>
             <div className="card-grid">
               <div>
-                <p className="kpi-label">総ファイル数</p>
+                <p className="kpi-label">Total Files</p>
                 <p className="stat-value">{data.stats.total}</p>
               </div>
               <div>
-                <p className="kpi-label">解析済み</p>
+                <p className="kpi-label">Analyzed</p>
                 <p className="stat-value">{data.stats.analyzed}</p>
               </div>
               <div>
-                <p className="kpi-label">未解析</p>
+                <p className="kpi-label">Unprocessed</p>
                 <p className="stat-value">{data.stats.unprocessed}</p>
               </div>
               <div>
-                <p className="kpi-label">ゴミ箱</p>
+                <p className="kpi-label">In Trash</p>
                 <p className="stat-value">{data.stats.trashed}</p>
               </div>
             </div>
@@ -79,7 +79,7 @@ export function SettingsPage() {
           </article>
 
           <article className="card">
-            <h3>ゴミ箱フォルダ</h3>
+            <h3>Trash Folder</h3>
             <div className="row">
               <input
                 className="input"
@@ -95,13 +95,13 @@ export function SettingsPage() {
                 onClick={() => saveMutation.mutate(trashFolder.trim())}
               >
                 {saveMutation.isPending ? <Spinner size={14} inline /> : null}
-                保存
+                Save
               </button>
             </div>
           </article>
 
           <article className="card">
-            <h3>既定値</h3>
+            <h3>Defaults</h3>
             <p className="muted">ぼけしきい値: {data.defaults.blur_threshold}</p>
             <p className="muted">
               類似距離: {data.defaults.similarity_threshold}（最大 {data.defaults.max_similarity_distance}）
@@ -110,7 +110,7 @@ export function SettingsPage() {
           </article>
 
           <article className="card">
-            <h3>対応拡張子</h3>
+            <h3>Supported Extensions</h3>
             <p className="muted">画像 ({data.extensions.image.length}): {data.extensions.image.join(', ')}</p>
             <p className="muted">動画 ({data.extensions.video.length}): {data.extensions.video.join(', ')}</p>
           </article>

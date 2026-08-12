@@ -9,17 +9,35 @@ import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
 import { useViewMode } from '../hooks/useViewMode'
 
+const PAGE_SIZE = 60
+
 export function ManualSortPage() {
   const toast = useToast()
   const view = useViewMode('manual-sort')
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [destinationFolder, setDestinationFolder] = useState('')
+  const [page, setPage] = useState(1)
 
   const files = useQuery({
-    queryKey: ['manual-files'],
-    queryFn: () => api.files(new URLSearchParams({ page: '1', limit: '100' })),
+    queryKey: ['manual-files', page],
+    queryFn: () => api.files(new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) })),
+    placeholderData: (prev) => prev,
   })
   const folders = useQuery({ queryKey: ['folders'], queryFn: api.folders })
+
+  const total = files.data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  /**
+   * 移動・ゴミ箱送りの後に一覧を取り直す。
+   * 件数が減って現在のページが範囲外になった場合は最終ページへ押し戻す
+   * （でないと空のページが表示されたまま操作できなくなる）。
+   */
+  const refetchAndClampPage = async () => {
+    const { data } = await files.refetch()
+    const newTotalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE))
+    setPage((p) => Math.min(p, newTotalPages))
+  }
 
   const toggle = (id: number) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -36,7 +54,7 @@ export function ManualSortPage() {
         toast.success(`${res.moved} 件を「${folderLabel}」へ移動しました`, 'Manual Sort')
       }
       setSelectedIds([])
-      await files.refetch()
+      await refetchAndClampPage()
     },
     onError: (error) => {
       toast.error(getApiErrorMessage(error), '移動に失敗しました')
@@ -53,7 +71,7 @@ export function ManualSortPage() {
         toast.success(`${res.moved} 件をゴミ箱へ送りました`, 'Manual Sort')
       }
       setSelectedIds([])
-      await files.refetch()
+      await refetchAndClampPage()
     },
     onError: (error) => {
       toast.error(getApiErrorMessage(error), 'ゴミ箱移動に失敗しました')
@@ -81,7 +99,9 @@ export function ManualSortPage() {
 
   const onDragStart = useDraggableFiles(selectedIds)
   const busy = moveMutation.isPending || trashMutation.isPending
-  const items = (files.data?.items ?? []).slice(0, 60)
+  const items = files.data?.items ?? []
+  const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
+  const rangeEnd = (page - 1) * PAGE_SIZE + items.length
 
   return (
     <section className="page">
@@ -93,8 +113,9 @@ export function ManualSortPage() {
         <div className="toolbar-group">
           <span className="status-chip">
             <span className="status-dot" />
-            Files: {files.data?.total ?? 0}
+            {rangeStart}-{rangeEnd} / {total}
           </span>
+          <span className="muted">Page {page} / {totalPages}</span>
           <span className="muted">Selected: {selectedIds.length}</span>
         </div>
         <div className="toolbar-group">
@@ -106,6 +127,26 @@ export function ManualSortPage() {
             onModeChange={view.setMode}
             onSizeChange={view.setSize}
           />
+          <button
+            className="button secondary"
+            disabled={busy || page <= 1}
+            onClick={() => {
+              setPage((p) => Math.max(1, p - 1))
+              setSelectedIds([])
+            }}
+          >
+            Prev
+          </button>
+          <button
+            className="button secondary"
+            disabled={busy || page >= totalPages}
+            onClick={() => {
+              setPage((p) => Math.min(totalPages, p + 1))
+              setSelectedIds([])
+            }}
+          >
+            Next
+          </button>
         </div>
       </div>
       <article className="card">
@@ -116,7 +157,9 @@ export function ManualSortPage() {
           isEmpty={false}
           loadingMessage="ファイルとフォルダ情報を読み込み中..."
         />
-        <p>対象ファイル: {files.data?.total ?? 0}</p>
+        <p>
+          対象ファイル: {total} 件（このページに {items.length} 件を表示）
+        </p>
         <div className="row">
           <select
             className="input"
@@ -177,6 +220,8 @@ export function ManualSortPage() {
         </div>
         <FolderDropPanel
           folders={folders.data?.folders ?? []}
+          libraryRoot={folders.data?.root_path}
+          counts={folders.data?.counts}
           onDropFiles={handleDropToFolder}
           onFolderCreated={handleFolderCreated}
           disabled={busy}

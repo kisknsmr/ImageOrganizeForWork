@@ -165,6 +165,15 @@ export function CleanupIcon(props: IconProps) {
   )
 }
 
+export function ResetIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M 13.28 8 A 5.28 5.28 0 1 1 11.36 4.05" {...STROKE} />
+      <polyline points="11.2,1.28 11.36,4.05 14.13,3.89" {...STROKE} />
+    </Svg>
+  )
+}
+
 export function BrandIcon({ size = 28 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 28 28" aria-hidden="true">

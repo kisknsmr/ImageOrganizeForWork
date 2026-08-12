@@ -1,26 +1,117 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { api } from '../api/client'
+import { FolderDropPanel } from '../components/FolderDropPanel'
 import { QueryState } from '../components/QueryState'
+import { Spinner } from '../components/Spinner'
+import { TruncationNotice } from '../components/TruncationNotice'
 import { ViewControls } from '../components/ViewControls'
+import { getApiErrorMessage, useToast } from '../components/useToast'
+import { useDraggableFiles } from '../hooks/useDraggableFiles'
 import { useViewMode } from '../hooks/useViewMode'
 
+const PAGE_SIZE = 60
+
 export function BlurryPage() {
+  const toast = useToast()
   const view = useViewMode('blurry')
-  const blurry = useQuery({ queryKey: ['blurry', 20], queryFn: () => api.blurry(20) })
-  const items = (blurry.data?.items ?? []).slice(0, 60)
+  // null = 未編集。既定値はサーバー設定に追従させる
+  const [thresholdInput, setThresholdInput] = useState<number | null>(null)
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [page, setPage] = useState(1)
+  const [showFolderPanel, setShowFolderPanel] = useState(false)
+
+  const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings })
+  const threshold = thresholdInput ?? settings.data?.defaults.blur_threshold ?? 20
+
+  const blurry = useQuery({
+    queryKey: ['blurry', threshold],
+    queryFn: () => api.blurry(threshold),
+  })
+  const folders = useQuery({
+    queryKey: ['folders'],
+    queryFn: api.folders,
+    enabled: showFolderPanel,
+  })
+
+  // /api/blurry はしきい値以下を一括で返すため、表示はクライアント側でページングする
+  const all = blurry.data?.items ?? []
+  const total = all.length
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const items = all.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const rangeStart = total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1
+  const rangeEnd = (currentPage - 1) * PAGE_SIZE + items.length
+
+  const toggle = (id: number) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+
+  const selectPage = () => setSelectedIds(items.map((item) => item.id))
+  const clearSelection = () => setSelectedIds([])
+
+  const trashMutation = useMutation({
+    mutationFn: (ids: number[]) => api.batchMoveToTrash(ids),
+    onSuccess: async (res) => {
+      const failed = res.failed_ids?.length ?? 0
+      if (failed > 0) {
+        toast.warning(`ゴミ箱へ: ${res.moved} 件 / 失敗: ${failed} 件`, 'Blurry')
+      } else {
+        toast.success(`${res.moved} 件をゴミ箱へ移動しました`, 'Blurry')
+      }
+      setSelectedIds([])
+      await blurry.refetch()
+    },
+    onError: (error) => {
+      toast.error(getApiErrorMessage(error), 'ゴミ箱への移動に失敗しました')
+    },
+  })
+
+  const moveMutation = useMutation({
+    mutationFn: ({ ids, folder }: { ids: number[]; folder: string }) => api.batchMoveFile(ids, folder),
+    onSuccess: async (res, vars) => {
+      const failed = res.failed_ids?.length ?? 0
+      const folderLabel = vars.folder.split(/[\\/]/).pop() || vars.folder
+      if (failed > 0) {
+        toast.warning(`${folderLabel} へ移動: ${res.moved} 件 / 失敗: ${failed} 件`, 'Blurry')
+      } else {
+        toast.success(`${res.moved} 件を「${folderLabel}」へ移動しました`, 'Blurry')
+      }
+      setSelectedIds([])
+      await blurry.refetch()
+    },
+    onError: (error) => {
+      toast.error(getApiErrorMessage(error), '移動に失敗しました')
+    },
+  })
+
+  const trashSelected = () => {
+    if (!selectedIds.length) return
+    if (!window.confirm(`${selectedIds.length} 件をゴミ箱へ移動しますか？`)) return
+    trashMutation.mutate(selectedIds)
+  }
+
+  const handleDrop = (folder: string, ids: number[]) => {
+    moveMutation.mutate({ ids, folder })
+  }
+
+  const onDragStart = useDraggableFiles(selectedIds)
+  const busy = trashMutation.isPending || moveMutation.isPending
 
   return (
     <section className="page">
       <header className="page-header">
         <h2>Blurry Photos</h2>
-        <p className="page-subtitle">ぼけスコアが低い画像候補を確認し、削除判断の前段として使います。</p>
+        <p className="page-subtitle">ぼけスコアが低い画像候補を確認し、まとめてゴミ箱や任意のフォルダへ移動できます。</p>
       </header>
       <div className="toolbar">
         <div className="toolbar-group">
           <span className="status-chip">
             <span className="status-dot" />
-            Candidates: {blurry.data?.items.length ?? 0}
+            {rangeStart}-{rangeEnd} / {total}
           </span>
+          <span className="muted">Page {currentPage} / {totalPages}</span>
+          <span className="muted">Selected: {selectedIds.length}</span>
         </div>
         <div className="toolbar-group">
           <ViewControls
@@ -31,32 +122,118 @@ export function BlurryPage() {
             onModeChange={view.setMode}
             onSizeChange={view.setSize}
           />
+          <button
+            className="button secondary"
+            disabled={busy || currentPage <= 1}
+            onClick={() => {
+              setPage(Math.max(1, currentPage - 1))
+              setSelectedIds([])
+            }}
+          >
+            Prev
+          </button>
+          <button
+            className="button secondary"
+            disabled={busy || currentPage >= totalPages}
+            onClick={() => {
+              setPage(Math.min(totalPages, currentPage + 1))
+              setSelectedIds([])
+            }}
+          >
+            Next
+          </button>
         </div>
       </div>
       <article className="card">
-        <QueryState
-          isLoading={blurry.isPending}
-          isError={blurry.isError}
-          error={blurry.error}
-          isEmpty={!blurry.isPending && !blurry.isError && items.length === 0}
-          loadingMessage="ぼけ候補を読み込み中..."
-          emptyMessage="ぼけ候補は見つかりませんでした。"
+        <div className="row">
+          <label className="muted">
+            ぼけしきい値:
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={1000}
+              value={threshold}
+              onChange={(e) => {
+                setThresholdInput(Math.min(1000, Math.max(1, Number(e.target.value) || 1)))
+                setPage(1)
+                setSelectedIds([])
+              }}
+              disabled={busy}
+              style={{ width: 88, marginLeft: 8 }}
+            />
+          </label>
+          <button className="button secondary" type="button" disabled={busy || !items.length} onClick={selectPage}>
+            このページを全選択
+          </button>
+          <button className="button secondary" type="button" disabled={busy || !selectedIds.length} onClick={clearSelection}>
+            選択解除
+          </button>
+          <button
+            className={`button ${showFolderPanel ? '' : 'secondary'}`}
+            type="button"
+            onClick={() => setShowFolderPanel((v) => !v)}
+          >
+            {showFolderPanel ? 'パネルを隠す' : 'フォルダパネル'}
+          </button>
+          <button className="button danger" disabled={busy || !selectedIds.length} onClick={trashSelected}>
+            {trashMutation.isPending ? <Spinner size={14} inline /> : null}
+            選択をゴミ箱へ ({selectedIds.length})
+          </button>
+        </div>
+        <p className="muted">
+          しきい値未満のぼけ候補: {total} 件（このページに {items.length} 件を表示）
+        </p>
+        <TruncationNotice
+          info={blurry.data}
+          shown={total}
+          subject="ぼけ候補"
+          hint="しきい値を下げて絞り込んでください。"
         />
-        <p>ぼけ候補: {blurry.data?.items.length ?? 0} 件</p>
       </article>
-      <div
-        className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
-        style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
-      >
-        {!blurry.isPending &&
-          !blurry.isError &&
-          items.map((item) => (
-            <button key={item.id} className="thumb-item">
-              <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
-              <span>{item.filename}</span>
-              <p className="thumb-meta">blur: {item.blur_score ?? '-'}</p>
-            </button>
-          ))}
+      <QueryState
+        isLoading={blurry.isPending}
+        isError={blurry.isError}
+        error={blurry.error}
+        isEmpty={!blurry.isPending && !blurry.isError && total === 0}
+        loadingMessage="ぼけ候補を読み込み中..."
+        emptyMessage="ぼけ候補は見つかりませんでした。"
+      />
+      <div className={`gallery-layout ${showFolderPanel ? 'with-folder' : ''}`}>
+        <div
+          className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
+          style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
+        >
+          {!blurry.isPending &&
+            !blurry.isError &&
+            items.map((item) => (
+              <label
+                key={item.id}
+                className="thumb-item checkbox-card"
+                draggable
+                onDragStart={onDragStart(item.id)}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(item.id)}
+                  onChange={() => toggle(item.id)}
+                  disabled={busy}
+                />
+                <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+                <span>{item.filename}</span>
+                <p className="thumb-meta">blur: {item.blur_score ?? '-'}</p>
+              </label>
+            ))}
+        </div>
+        {showFolderPanel ? (
+          <FolderDropPanel
+            folders={folders.data?.folders ?? []}
+            libraryRoot={folders.data?.root_path}
+            counts={folders.data?.counts}
+            onDropFiles={handleDrop}
+            disabled={busy}
+          />
+        ) : null}
       </div>
     </section>
   )

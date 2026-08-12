@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { api } from '../api/client'
 import { QueryState } from '../components/QueryState'
 import { Spinner } from '../components/Spinner'
+import { TruncationNotice } from '../components/TruncationNotice'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useViewMode } from '../hooks/useViewMode'
@@ -67,6 +68,7 @@ export function TinyFilesPage() {
           <span className="status-chip">
             <span className="status-dot" />
             Candidates: {items.length}
+            {tiny.data?.truncated ? ` / ${tiny.data.available}` : ''}
           </span>
           <span className="muted">Selected: {selectedIds.length}</span>
         </div>
@@ -115,6 +117,12 @@ export function TinyFilesPage() {
           isEmpty={!tiny.isPending && !tiny.isError && items.length === 0}
           loadingMessage="低容量ファイルを検索中..."
           emptyMessage="該当するファイルは見つかりませんでした。"
+        />
+        <TruncationNotice
+          info={tiny.data}
+          shown={items.length}
+          subject="低容量ファイル"
+          hint="しきい値を下げて絞り込んでください。"
         />
       </article>
       <div

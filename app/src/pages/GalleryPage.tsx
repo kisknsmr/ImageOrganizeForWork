@@ -23,6 +23,7 @@ export function GalleryPage() {
     return p
   }, [page])
   const files = useQuery({ queryKey: ['files', page], queryFn: () => api.files(params) })
+  const totalPages = Math.max(1, Math.ceil((files.data?.total ?? 0) / 80))
   const folders = useQuery({
     queryKey: ['folders'],
     queryFn: api.folders,
@@ -75,7 +76,7 @@ export function GalleryPage() {
             <span className="status-dot" />
             Loaded {items.length} items
           </span>
-          <span className="muted">Page {page}</span>
+          <span className="muted">Page {page} / {totalPages}</span>
           {selectedIds.length > 0 && <span className="muted">Selected: {selectedIds.length}</span>}
         </div>
         <div className="toolbar-group">
@@ -95,10 +96,14 @@ export function GalleryPage() {
           >
             {showFolderPanel ? 'パネルを隠す' : 'フォルダパネル'}
           </button>
-          <button className="button secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+          <button className="button secondary" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
             Prev
           </button>
-          <button className="button secondary" onClick={() => setPage((p) => p + 1)}>
+          <button
+            className="button secondary"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
             Next
           </button>
         </div>
@@ -146,6 +151,8 @@ export function GalleryPage() {
         {showFolderPanel ? (
           <FolderDropPanel
             folders={folders.data?.folders ?? []}
+            libraryRoot={folders.data?.root_path}
+            counts={folders.data?.counts}
             onDropFiles={handleDrop}
             onFolderCreated={handleFolderCreated}
             disabled={moveMutation.isPending}

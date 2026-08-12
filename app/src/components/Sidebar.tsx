@@ -1,8 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { NavLink } from 'react-router-dom'
 import { api } from '../api/client'
 import { BrandIcon } from './icons'
 import { NAV_ICON_MAP, type NavIconName } from './navIcons'
+import { getApiErrorMessage, useToast } from './useToast'
 
 type NavItem = {
   to: string
@@ -21,7 +22,7 @@ const sections: NavSection[] = [
   {
     title: 'IMPORT',
     items: [
-      { to: '/import', label: 'Import & Analyze', icon: 'import', tooltip: '取込（フル/差分）と解析' },
+      { to: '/preprocess', label: 'Preprocess', icon: 'import', tooltip: '取込前に画像/動画/その他フォルダへ振り分け' },
     ],
   },
   {
@@ -69,9 +70,35 @@ function NavItemRow({ item }: { item: NavItem }) {
 }
 
 export function Sidebar() {
+  const toast = useToast()
+  const queryClient = useQueryClient()
   const stats = useQuery({ queryKey: ['stats'], queryFn: api.stats, refetchInterval: 5000 })
   const TrashIcon = NAV_ICON_MAP.trash
   const SettingsIcon = NAV_ICON_MAP.settings
+  const ResetIcon = NAV_ICON_MAP.reset
+
+  const resetAnalysis = useMutation({
+    mutationFn: (rootPath: string) => api.analyzeReset(rootPath),
+    onSuccess: (res) => {
+      toast.success(`${res.reset}件を未解析に戻しました`, 'Reset')
+      queryClient.invalidateQueries()
+    },
+    onError: (error) => {
+      toast.error(getApiErrorMessage(error), '解析結果のリセットに失敗しました')
+    },
+  })
+
+  const handleResetAnalysis = () => {
+    const rootPath = stats.data?.root_path
+    if (!rootPath) return
+    const analyzed = stats.data?.analyzed ?? 0
+    const confirmed = window.confirm(
+      `現在のライブラリ「${rootPath}」の解析結果をリセットします。\n` +
+        `解析済み ${analyzed}件が未解析に戻り、再度 Start Analyze が必要になります。\n` +
+        '（Keep/Discard等の判定やゴミ箱の状態は変わりません）\n実行しますか？',
+    )
+    if (confirmed) resetAnalysis.mutate(rootPath)
+  }
 
   return (
     <aside className="sidebar">
@@ -103,6 +130,16 @@ export function Sidebar() {
             <span className="lib-stat muted">({stats.data.trashed.toLocaleString()} trashed)</span>
           )}
         </div>
+        <button
+          type="button"
+          className="sidebar-icon-button"
+          title="現在のライブラリの解析結果をリセット（未解析に戻す）"
+          aria-label="Reset analysis"
+          disabled={!stats.data?.root_path || resetAnalysis.isPending}
+          onClick={handleResetAnalysis}
+        >
+          <ResetIcon size={15} />
+        </button>
         <NavLink
           to="/trash"
           className={({ isActive }) => `sidebar-icon-button ${isActive ? 'active' : ''}`}

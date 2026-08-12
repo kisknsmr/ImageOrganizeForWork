@@ -1,18 +1,42 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
+import { ImportPanel } from '../components/ImportPanel'
 import { QueryState } from '../components/QueryState'
+
+type StatTileProps = {
+  label: string
+  value: number | string
+  hint?: string
+}
+
+/** KPI タイル。見出しではなく数値を主役にし、補足は 1 行に抑える。 */
+function StatTile({ label, value, hint }: StatTileProps) {
+  return (
+    <article className="card">
+      <p className="kpi-label">{label}</p>
+      <p className="stat-value">{typeof value === 'number' ? value.toLocaleString() : value}</p>
+      {hint && <p className="muted md-body-small">{hint}</p>}
+    </article>
+  )
+}
 
 export function HomePage() {
   const stats = useQuery({ queryKey: ['stats'], queryFn: api.stats, refetchInterval: 3000 })
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 3000 })
   const hasError = stats.isError || health.isError
+  const ready = !stats.isPending && !health.isPending && !hasError
 
   return (
     <section className="page">
       <header className="page-header">
-        <h2>PhotoSortX Dashboard</h2>
-        <p className="page-subtitle">既存PyQt版の機能を維持しながら、Tauri版へ段階移行しています。</p>
+        <h2>Dashboard</h2>
+        <p className="page-subtitle">
+          対象フォルダを選んでスキャン・解析を実行します。件数はすべて現在のライブラリ配下の集計です。
+        </p>
       </header>
+
+      <ImportPanel />
+
       <QueryState
         isLoading={stats.isPending || health.isPending}
         isError={hasError}
@@ -20,44 +44,32 @@ export function HomePage() {
         isEmpty={false}
         loadingMessage="ダッシュボードを読み込み中..."
       />
-      {!stats.isPending && !health.isPending && !hasError && (
+
+      {ready && (
         <>
           <div className="card-grid">
-            <article className="card">
-              <h3>API Status</h3>
-              <p>{health.data?.ok ? 'Online' : 'Offline'}</p>
-              <small className="muted">version: {health.data?.version ?? '-'}</small>
-            </article>
-            <article className="card">
-              <h3>Total Files</h3>
-              <p>{stats.data?.total ?? 0}</p>
-            </article>
-            <article className="card">
-              <h3>Analyzed</h3>
-              <p>{stats.data?.analyzed ?? 0}</p>
-            </article>
-            <article className="card">
-              <h3>Triaged</h3>
-              <p>{stats.data?.triaged ?? 0}</p>
-            </article>
+            <StatTile label="Total files" value={stats.data?.total ?? 0} />
+            <StatTile label="Analyzed" value={stats.data?.analyzed ?? 0} />
+            <StatTile label="Triaged" value={stats.data?.triaged ?? 0} />
+            <StatTile label="Unprocessed" value={stats.data?.unprocessed ?? 0} />
+            <StatTile label="In trash" value={stats.data?.trashed ?? 0} />
+            <StatTile
+              label="API"
+              value={health.data?.ok ? 'Online' : 'Offline'}
+              hint={`version ${health.data?.version ?? '-'}`}
+            />
           </div>
-          <div className="card-grid">
-            <article className="card">
-              <h3>Unprocessed</h3>
-              <p>{stats.data?.unprocessed ?? 0}</p>
-            </article>
-            <article className="card">
-              <h3>In Trash</h3>
-              <p>{stats.data?.trashed ?? 0}</p>
-            </article>
-            <article className="card wide">
-              <h3>Root Path</h3>
-              <p className="mono">{stats.data?.root_path ?? '未設定'}</p>
-            </article>
-          </div>
+
+          <article className="card">
+            <p className="kpi-label">Current library</p>
+            <p className="mono">{stats.data?.root_path ?? '未設定'}</p>
+            <p className="muted md-body-small">
+              スキャン／解析の対象フォルダです。変更するには上の Selected Folder
+              で別のフォルダを指定して Scan を実行してください。
+            </p>
+          </article>
         </>
       )}
     </section>
   )
 }
-

@@ -1,12 +1,18 @@
 import type {
   AppSettings,
+  BlurryResponse,
+  DuplicatesResponse,
   FileItem,
+  FolderList,
   LibraryStats,
   OrganizeApplyResult,
   OrganizeCapabilities,
   OrganizePreview,
   PagedFiles,
+  ScanCheck,
   ScanJob,
+  SimilarResponse,
+  TinyResponse,
 } from '../types'
 
 const API_BASE = 'http://127.0.0.1:8765'
@@ -45,7 +51,13 @@ export const api = {
   scanStart: (rootPath: string) =>
     request<ScanJob>('/api/scan/start', { method: 'POST', body: JSON.stringify({ root_path: rootPath }) }),
   scanStatus: () => request<ScanJob>('/api/scan/status'),
+  scanCheck: (rootPath: string) =>
+    request<ScanCheck>(`/api/scan/check?root_path=${encodeURIComponent(rootPath)}`),
   analyzeStart: () => request<{ started: boolean; message?: string; job: ScanJob }>('/api/analyze/start', { method: 'POST' }),
+  analyzeReset: (rootPath: string) =>
+    request<{ reset: number }>('/api/analyze/reset', { method: 'POST', body: JSON.stringify({ root_path: rootPath }) }),
+  preprocessStart: (rootPath: string) =>
+    request<ScanJob>('/api/preprocess/start', { method: 'POST', body: JSON.stringify({ root_path: rootPath }) }),
   files: (params: URLSearchParams) => request<PagedFiles>(`/api/files?${params.toString()}`),
   triage: (id: number, action: 'keep' | 'discard' | 'skip' | null) =>
     request(`/api/files/${id}/triage`, { method: 'POST', body: JSON.stringify({ action }) }),
@@ -66,27 +78,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ file_ids: fileIds, destination_folder: destinationFolder }),
     }),
-  folders: () => request<{ folders: string[] }>('/api/folders'),
+  folders: () => request<FolderList>('/api/folders'),
   createFolder: (path: string) =>
     request<{ ok: boolean; path: string }>('/api/folders', {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
   triageNext: (afterId = 0) => request<{ item: FileItem | null }>(`/api/triage/next?after_id=${afterId}`),
-  blurry: (threshold = 20) => request<{ items: FileItem[] }>(`/api/blurry?threshold=${threshold}`),
-  tiny: (maxSizeKb = 10) =>
-    request<{ max_size_kb: number; items: FileItem[] }>(`/api/tiny?max_size_kb=${maxSizeKb}`),
+  /** triage_status で絞り込んだファイル一覧（Discard 済みの回収などに使う） */
+  filesByTriage: (triageStatus: 'keep' | 'discard' | 'skip', page = 1, limit = 200) =>
+    request<PagedFiles>(
+      `/api/files?${new URLSearchParams({
+        page: String(page),
+        limit: String(limit),
+        triage_status: triageStatus,
+      }).toString()}`,
+    ),
+  blurry: (threshold = 20) => request<BlurryResponse>(`/api/blurry?threshold=${threshold}`),
+  tiny: (maxSizeKb = 10) => request<TinyResponse>(`/api/tiny?max_size_kb=${maxSizeKb}`),
   settings: () => request<AppSettings>('/api/settings'),
   updateSettings: (payload: { trash_folder?: string }) =>
     request<AppSettings>('/api/settings', { method: 'POST', body: JSON.stringify(payload) }),
   duplicates: (useFullHash = false) =>
-    request<{ groups: Array<{ hash: string; count: number; items: FileItem[] }> }>(
-      `/api/duplicates?use_full_hash=${useFullHash ? 'true' : 'false'}`,
+    request<DuplicatesResponse>(`/api/duplicates?use_full_hash=${useFullHash ? 'true' : 'false'}`),
+  duplicatesFullHashStart: () =>
+    request<{ started: boolean; pending: number; message?: string; job: ScanJob }>(
+      '/api/duplicates/full-hash/start',
+      { method: 'POST' },
     ),
-  similar: (distance = 5) =>
-    request<{ groups: Array<{ id: string; count: number; best_id: number | null; items: FileItem[] }> }>(
-      `/api/similar?distance=${distance}`,
-    ),
+  similar: (distance = 5) => request<SimilarResponse>(`/api/similar?distance=${distance}`),
   organizeCapabilities: () => request<OrganizeCapabilities>('/api/organize/capabilities'),
   organizePreview: (gapHours = 6, minGroupSize = 1, maxItemsPerGroup = 8) =>
     request<OrganizePreview>(

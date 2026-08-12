@@ -7,16 +7,41 @@ import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useViewMode } from '../hooks/useViewMode'
 
+const PAGE_SIZE = 80
+
 export function TrashPage() {
   const toast = useToast()
   const view = useViewMode('trash')
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [destinationFolder, setDestinationFolder] = useState('')
+  const [page, setPage] = useState(1)
 
   const trash = useQuery({
-    queryKey: ['trash-items'],
-    queryFn: () => api.files(new URLSearchParams({ page: '1', limit: '100', include_trash: 'true', status: 'trash' })),
+    queryKey: ['trash-items', page],
+    queryFn: () =>
+      api.files(
+        new URLSearchParams({
+          page: String(page),
+          limit: String(PAGE_SIZE),
+          include_trash: 'true',
+          status: 'trash',
+        }),
+      ),
+    placeholderData: (prev) => prev,
   })
+
+  const total = trash.data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const items = trash.data?.items ?? []
+  const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
+  const rangeEnd = (page - 1) * PAGE_SIZE + items.length
+
+  /** 削除・復元で件数が減って現在ページが範囲外になったら押し戻す */
+  const refetchAndClampPage = async () => {
+    const { data } = await trash.refetch()
+    const newTotalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE))
+    setPage((p) => Math.min(p, newTotalPages))
+  }
   const folders = useQuery({ queryKey: ['folders'], queryFn: api.folders })
 
   const toggle = (id: number) => {
@@ -33,7 +58,7 @@ export function TrashPage() {
         toast.success(`${res.moved} 件を復元しました`, 'Trash')
       }
       setSelectedIds([])
-      await trash.refetch()
+      await refetchAndClampPage()
     },
     onError: (error) => {
       toast.error(getApiErrorMessage(error), '復元に失敗しました')
@@ -61,7 +86,7 @@ export function TrashPage() {
         toast.success(`${ok} 件をDBから削除しました`, 'Trash')
       }
       setSelectedIds([])
-      await trash.refetch()
+      await refetchAndClampPage()
     },
     onError: (error) => {
       toast.error(getApiErrorMessage(error), 'DB削除に失敗しました')
@@ -97,7 +122,7 @@ export function TrashPage() {
         toast.success(`${deleted} 件を完全削除しました`, 'Trash')
       }
       setSelectedIds([])
-      await trash.refetch()
+      await refetchAndClampPage()
     },
     onError: (error) => {
       toast.error(getApiErrorMessage(error), '完全削除に失敗しました')
@@ -133,8 +158,9 @@ export function TrashPage() {
         <div className="toolbar-group">
           <span className="status-chip">
             <span className="status-dot" />
-            Items: {trash.data?.total ?? 0}
+            {rangeStart}-{rangeEnd} / {total}
           </span>
+          <span className="muted">Page {page} / {totalPages}</span>
           <span className="muted">Selected: {selectedIds.length}</span>
         </div>
         <div className="toolbar-group">
@@ -146,6 +172,26 @@ export function TrashPage() {
             onModeChange={view.setMode}
             onSizeChange={view.setSize}
           />
+          <button
+            className="button secondary"
+            disabled={busy || page <= 1}
+            onClick={() => {
+              setPage((p) => Math.max(1, p - 1))
+              setSelectedIds([])
+            }}
+          >
+            Prev
+          </button>
+          <button
+            className="button secondary"
+            disabled={busy || page >= totalPages}
+            onClick={() => {
+              setPage((p) => Math.min(totalPages, p + 1))
+              setSelectedIds([])
+            }}
+          >
+            Next
+          </button>
         </div>
       </div>
       <article className="card">
@@ -156,7 +202,7 @@ export function TrashPage() {
           isEmpty={false}
           loadingMessage="ゴミ箱データを読み込み中..."
         />
-        <p>ゴミ箱件数: {trash.data?.total ?? 0}</p>
+        <p>ゴミ箱件数: {total} 件（このページに {items.length} 件を表示）</p>
         <div className="row">
           <select
             className="input"
@@ -203,7 +249,7 @@ export function TrashPage() {
       >
         {!trash.isPending &&
           !trash.isError &&
-          (trash.data?.items ?? []).slice(0, 80).map((item) => (
+          items.map((item) => (
             <label key={item.id} className="thumb-item checkbox-card">
               <input
                 type="checkbox"
