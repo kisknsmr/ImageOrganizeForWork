@@ -54,7 +54,9 @@ class TestDeclaredExtensions(unittest.TestCase):
         self.assertEqual(overlap, set(), f"画像/動画で重複: {sorted(overlap)}")
 
     def test_common_video_extensions_are_covered(self):
-        for ext in ('.mp4', '.mov', '.avi', '.mkv', '.m4v'):
+        # .ts / .m2ts はレコーダーやビデオカメラの録画で頻出する。
+        # 拡張子が漏れると 03 Others へ振り分けられてしまう
+        for ext in ('.mp4', '.mov', '.avi', '.mkv', '.m4v', '.ts', '.m2ts', '.mts'):
             self.assertIn(ext, config.VIDEO_EXTENSIONS)
 
 

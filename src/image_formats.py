@@ -40,11 +40,18 @@ _CANDIDATE_IMAGE_EXTENSIONS: FrozenSet[str] = frozenset({
 
 #: 動画は OpenCV(FFMPEG バックエンド) が読む。拡張子から可否を静的に判定できないため、
 #: FFMPEG が一般に扱えるコンテナを列挙する。
-#: 注意: .mpg/.mpeg は Pillow にも MPEG プラグインとして登録されているが、
-#: フレームを取り出せるのは OpenCV 側なので画像側には入れない。
+#: 注意:
+#:   - .mpg/.mpeg は Pillow にも MPEG プラグインとして登録されているが、
+#:     フレームを取り出せるのは OpenCV 側なので画像側には入れない。
+#:   - .ts は TypeScript のソースと拡張子が衝突するが、本アプリはメディア整理が
+#:     目的なので MPEG-TS（レコーダー/カメラの録画）として扱う。
 VIDEO_EXTENSIONS: FrozenSet[str] = frozenset({
     '.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wmv', '.webm',
-    '.mpg', '.mpeg', '.mts', '.m2ts', '.3gp', '.flv',
+    '.mpg', '.mpeg', '.mts', '.m2ts', '.3gp', '.3g2', '.flv',
+    # MPEG-TS 系（デジタル放送の録画、ビデオカメラの分割ファイル）
+    '.ts', '.m2t',
+    # DVD-Video / Windows Media
+    '.vob', '.asf',
 })
 
 

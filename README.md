@@ -24,7 +24,7 @@ AI を併用できる画像整理・管理用デスクトップアプリ（PyQt6
 |------|------|
 | 画像（標準） | JPEG (`.jpg .jpeg .jpe .jfif`)、PNG (`.png .apng`)、WebP、TIFF、BMP/DIB、GIF、JPEG 2000 (`.jp2 .j2k .jpf .jpx`)、PSD、TGA、PCX、PPM 系、SGI、QOI |
 | 画像（要プラグイン） | HEIC/HEIF (`.heic .heif .hif`) — `pillow-heif` が必要。AVIF (`.avif .avifs`) — Pillow 12 以降で標準対応 |
-| 動画 | `.mp4 .mov .m4v .avi .mkv .wmv .webm .mpg .mpeg .mts .m2ts .3gp .flv`（OpenCV の FFMPEG バックエンド） |
+| 動画 | `.mp4 .mov .m4v .avi .mkv .wmv .webm .mpg .mpeg .ts .m2t .mts .m2ts .3gp .3g2 .vob .asf .flv`（OpenCV の FFMPEG バックエンド） |
 
 意図的に対象外にしているもの: ベクタ/文書（`.eps .ps .wmf .emf`）、科学データ
 （`.fits .grib .hdf`）、アイコン/テクスチャ（`.ico .icns .dds`）。写真整理の対象ではなく、
@@ -32,6 +32,9 @@ AI を併用できる画像整理・管理用デスクトップアプリ（PyQt6
 
 > **RAW（`.cr2 .nef .arw .dng` など）は未対応です。** Pillow では復号できず、
 > `rawpy`（LibRaw）等のデコーダ追加が必要になります。
+
+> `.ts` は TypeScript のソースと拡張子が衝突しますが、本アプリはメディア整理が
+> 目的のため MPEG-TS（録画ファイル）として扱います。
 
 候補の定義と判定は `src/image_formats.py` にまとまっています。
 
