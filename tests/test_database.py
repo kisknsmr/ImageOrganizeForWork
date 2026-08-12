@@ -152,6 +152,27 @@ class TestPruneMissingPaths(_DBTestBase):
         self.assertGreaterEqual(n, 1)
         self.assertEqual(self.db.get_file_count(), 0)
 
+    def test_prune_keeps_rows_when_parent_folder_is_unreachable(self):
+        """OneDrive/NAS が一時的にオフラインのとき、ライブラリ記録を消してはいけない。
+
+        親フォルダごと見えない = ドライブ未接続の可能性が高いので温存する。
+        （ファイル単体が消えた場合は従来どおり削除する）
+        """
+        subdir = os.path.join(self.temp_dir, "offline_drive")
+        os.makedirs(subdir, exist_ok=True)
+        path = os.path.join(subdir, "photo.jpg")
+        with open(path, "w") as fp:
+            fp.write("x")
+        self.db.insert_file(path, 100, os.path.getmtime(path))
+        self.assertEqual(self.db.get_file_count(), 1)
+
+        # フォルダごと消える = オフライン相当
+        shutil.rmtree(subdir)
+
+        n = self.db.prune_missing_file_paths(include_trash=True)
+        self.assertEqual(n, 0, "親フォルダが見えないだけで行を消してはいけない")
+        self.assertEqual(self.db.get_file_count(), 1)
+
     def test_prune_keeps_existing(self):
         path = self._insert("stay.jpg")
         n = self.db.prune_missing_file_paths(include_trash=True)
@@ -246,7 +267,7 @@ class TestAnalysisResults(_DBTestBase):
         self.db.update_analysis_result(fid1, "samehash", "", 10.0)
         self.db.update_analysis_result(fid2, "samehash", "", 10.0)
         dups = self.db.get_duplicate_hashes()
-        self.assertTrue(any(h == "samehash" for h, _ in dups))
+        self.assertTrue(any(h == "samehash" for h, _size, _cnt in dups))
 
     def test_get_files_by_hash(self):
         p1 = self._insert("h1.jpg")
@@ -295,7 +316,7 @@ class TestFullHash(_DBTestBase):
         self.db.update_full_hash(fid1, "aaa111")
         self.db.update_full_hash(fid2, "aaa111")
         dups = self.db.get_duplicate_hashes(use_full_hash=True)
-        self.assertTrue(any(h == "aaa111" for h, _ in dups))
+        self.assertTrue(any(h == "aaa111" for h, _size, _cnt in dups))
 
     def test_full_hash_differentiates(self):
         """完全ハッシュが異なれば重複にならない"""
@@ -326,6 +347,169 @@ class TestFullHash(_DBTestBase):
         self.db.update_full_hash(fid2, "same_full")
         files = self.db.get_files_by_hash("same_full", use_full_hash=True)
         self.assertEqual(len(files), 2)
+
+
+# =================================================================
+# root_path スコープとゴミ箱の関係
+# =================================================================
+class TestTrashScoping(_DBTestBase):
+    """
+    ゴミ箱は root_path の外（既定 ~/PhotoSortX_Trash）にあるため、
+    root スコープを素通しにしないと Trash ページが常に空になる。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.lib = os.path.join(self.temp_dir, "library")
+        self.trash_dir = os.path.join(self.temp_dir, "PhotoSortX_Trash")
+        self._insert("library/keep.jpg")
+        self.trashed_path = self._insert("PhotoSortX_Trash/deleted.jpg")
+        fid = self._get_id(self.trashed_path)
+        with self.db.lock:
+            self.db.conn.execute("UPDATE files SET status='trash' WHERE id=?", (fid,))
+            self.db.conn.commit()
+        self.db.set_setting("root_path", self.lib)
+
+    def test_trash_page_query_returns_trash_outside_root(self):
+        page = self.db.get_files_page(page=1, limit=100, include_trash=True, status="trash")
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(page["items"][0]["path"], self.trashed_path)
+
+    def test_normal_listing_still_scoped_to_root(self):
+        page = self.db.get_files_page(page=1, limit=100)
+        self.assertEqual(page["total"], 1)
+        self.assertTrue(page["items"][0]["path"].endswith("keep.jpg"))
+
+    def test_stats_count_trash_outside_root(self):
+        stats = self.db.get_library_stats()
+        self.assertEqual(stats["trashed"], 1)
+
+    def test_stats_total_excludes_trash(self):
+        stats = self.db.get_library_stats()
+        self.assertEqual(stats["total"], 1)
+        self.assertEqual(stats["total"], stats["analyzed"] + stats["unprocessed"])
+
+    def test_files_outside_root_still_excluded(self):
+        """ゴミ箱以外の root 外ファイルは従来どおり除外される"""
+        self._insert("other_library/x.jpg")
+        self.assertEqual(self.db.get_files_page(page=1, limit=100)["total"], 1)
+
+
+# =================================================================
+# スマート整理の対象ファイル
+# =================================================================
+class TestOrganizeSourceScoping(_DBTestBase):
+    """スマート整理は実ファイルを移動するので root 外を巻き込んではいけない"""
+
+    def setUp(self):
+        super().setUp()
+        self.lib = os.path.join(self.temp_dir, "library")
+        self._insert("library/a.jpg")
+        self._insert("other_library/b.jpg")
+
+    def test_scoped_to_root_by_default(self):
+        self.db.set_setting("root_path", self.lib)
+        files = self.db.get_all_files_with_info()
+        self.assertEqual([os.path.basename(f["path"]) for f in files], ["a.jpg"])
+
+    def test_unscoped_when_requested(self):
+        self.db.set_setting("root_path", self.lib)
+        self.assertEqual(len(self.db.get_all_files_with_info(scoped_to_root=False)), 2)
+
+    def test_all_files_when_no_root_path(self):
+        self.assertEqual(len(self.db.get_all_files_with_info()), 2)
+
+    def test_trash_excluded(self):
+        p = self._insert("library/gone.jpg")
+        fid = self._get_id(p)
+        with self.db.lock:
+            self.db.conn.execute("UPDATE files SET status='trash' WHERE id=?", (fid,))
+            self.db.conn.commit()
+        self.db.set_setting("root_path", self.lib)
+        self.assertEqual([os.path.basename(f["path"]) for f in self.db.get_all_files_with_info()], ["a.jpg"])
+
+
+# =================================================================
+# フォルダツリー
+# =================================================================
+class TestFolderTree(_DBTestBase):
+    """移動先フォルダ候補は現在の root_path 配下に限定される"""
+
+    def setUp(self):
+        super().setUp()
+        self.inside = os.path.join(self.temp_dir, "inside")
+        self._insert("inside/a.jpg")
+        self._insert("outside/b.jpg")
+
+    def test_scoped_to_root_path_by_default(self):
+        self.db.set_setting("root_path", self.inside)
+        self.assertEqual(list(self.db.get_folder_tree().keys()), [os.path.normpath(self.inside)])
+
+    def test_unscoped_when_requested(self):
+        self.db.set_setting("root_path", self.inside)
+        self.assertEqual(len(self.db.get_folder_tree(scoped_to_root=False)), 2)
+
+    def test_all_folders_when_no_root_path(self):
+        self.assertEqual(len(self.db.get_folder_tree()), 2)
+
+    def test_counts_files_per_folder(self):
+        self._insert("inside/c.jpg")
+        self.db.set_setting("root_path", self.inside)
+        self.assertEqual(self.db.get_folder_tree()[os.path.normpath(self.inside)], 2)
+
+
+# =================================================================
+# 重複グループ化
+# =================================================================
+class TestDuplicateGrouping(_DBTestBase):
+    """簡易ハッシュ (先頭8KB MD5) 衝突の扱い"""
+
+    def _insert_with_hash(self, name: str, size: int, hash_value: str) -> int:
+        path = self._insert(name, size=size)
+        fid = self._get_id(path)
+        self.db.update_analysis_result(fid, hash_value, "", 10.0)
+        return fid
+
+    def test_same_hash_same_size_is_duplicate(self):
+        """簡易ハッシュもサイズも同じなら重複グループになる"""
+        fid1 = self._insert_with_hash("a.jpg", 2048, "same_head")
+        fid2 = self._insert_with_hash("b.jpg", 2048, "same_head")
+        groups = self.db.get_duplicate_groups()
+        self.assertEqual(len(groups), 1)
+        self.assertCountEqual(groups[0][2], [fid1, fid2])
+
+    def test_same_hash_different_size_is_not_duplicate(self):
+        """先頭8KBが同じでもサイズが違えば別ファイル扱い（誤検出防止）"""
+        self._insert_with_hash("a.mp4", 1_000_000, "same_head")
+        self._insert_with_hash("b.mp4", 2_000_000, "same_head")
+        self.assertEqual(self.db.get_duplicate_groups(), [])
+
+    def test_get_files_by_hash_filters_by_size(self):
+        """size を指定するとサイズ違いは除外される"""
+        self._insert_with_hash("a.mp4", 1_000_000, "same_head")
+        self._insert_with_hash("b.mp4", 2_000_000, "same_head")
+        rows = self.db.get_files_by_hash("same_head", size=1_000_000)
+        self.assertEqual(len(rows), 1)
+
+    def test_empty_hash_is_ignored(self):
+        """空文字ハッシュ（解析スキップ）は重複候補にしない"""
+        self._insert_with_hash("a.mp4", 500, "")
+        self._insert_with_hash("b.mp4", 500, "")
+        self.assertEqual(self.db.get_duplicate_groups(), [])
+
+    def test_groups_scoped_to_root_path(self):
+        """root_path 配下のファイルだけがグループ化される"""
+        self._insert_with_hash("inside/a.jpg", 2048, "same_head")
+        self._insert_with_hash("outside/b.jpg", 2048, "same_head")
+        self.db.set_setting("root_path", os.path.join(self.temp_dir, "inside"))
+        self.assertEqual(self.db.get_duplicate_groups(), [])
+
+    def test_full_hash_candidates_respect_size(self):
+        """サイズ違いのみの衝突は完全ハッシュ計算の対象にしない"""
+        self._insert_with_hash("a.mp4", 1_000_000, "same_head")
+        self._insert_with_hash("b.mp4", 2_000_000, "same_head")
+        self.assertEqual(self.db.get_files_needing_full_hash(limit=10), [])
+        self.assertEqual(self.db.count_files_needing_full_hash(), 0)
 
 
 # =================================================================

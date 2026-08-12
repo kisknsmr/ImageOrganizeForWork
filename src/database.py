@@ -6,9 +6,10 @@ import shutil
 import time
 from threading import RLock
 from datetime import datetime
-from typing import Optional, List, Tuple, Set, Any
+from typing import Dict, Optional, List, Tuple, Set, Any
 
 from src.config import config
+from src.utils import path_under_root
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,9 @@ class DatabaseManager:
 
         missing_paths: Set[str] = set()
         invalid_ids: List[int] = []
+        # 親ディレクトリの存在チェック結果のキャッシュ（同一フォルダの連続判定を高速化）
+        parent_alive: dict = {}
+        skipped_offline = 0
 
         for i, (fid, path) in enumerate(rows):
             if not path or not str(path).strip():
@@ -230,10 +234,21 @@ class DatabaseManager:
             norm = os.path.normpath(path)
             try:
                 if not os.path.exists(norm):
+                    # 親フォルダごと見えない場合は「ファイルが消された」のではなく
+                    # OneDrive/NAS/外付けドライブが一時的にオフラインの可能性が高い。
+                    # 誤ってライブラリ記録を全消ししないよう、この行は温存する。
+                    parent = os.path.dirname(norm)
+                    if parent not in parent_alive:
+                        try:
+                            parent_alive[parent] = os.path.isdir(parent)
+                        except OSError:
+                            parent_alive[parent] = False
+                    if not parent_alive[parent]:
+                        skipped_offline += 1
+                        continue
                     missing_paths.add(path)
             except OSError as e:
                 logger.warning(f"prune_missing_file_paths: exists check failed for {path}: {e}")
-                missing_paths.add(path)
 
             if config.LOW_LOAD_MODE and (i + 1) % 1000 == 0:
                 time.sleep(config.LOW_LOAD_SLEEP_TIME)
@@ -247,6 +262,11 @@ class DatabaseManager:
             self.remove_files(missing_paths)
             removed += len(missing_paths)
 
+        if skipped_offline:
+            logger.warning(
+                f"prune_missing_file_paths: kept {skipped_offline} row(s) whose parent folder is "
+                f"unreachable (offline drive?) instead of deleting them"
+            )
         if removed:
             logger.info(f"prune_missing_file_paths: removed {removed} stale row(s)")
         return removed
@@ -260,22 +280,75 @@ class DatabaseManager:
                 return 0
 
     def get_unprocessed_count(self) -> int:
+        """未解析件数（現在の root_path 配下のみ）。"""
+        root_path = self.get_setting("root_path")
         with self.lock:
             try:
-                return self.conn.execute("SELECT COUNT(*) FROM files WHERE status = 'unprocessed'").fetchone()[0]
+                rows = self.conn.execute(
+                    "SELECT path FROM files WHERE status = 'unprocessed'").fetchall()
             except sqlite3.Error as e:
                 logger.error(f"Failed to get unprocessed count: {e}")
                 return 0
+        if not root_path:
+            return len(rows)
+        return sum(1 for (path,) in rows if path_under_root(path, root_path))
 
     def get_unprocessed_files(self, limit: int = 1000) -> List[Tuple[int, str, str, int]]:
+        """未解析ファイル一覧（現在の root_path 配下のみ）。
+
+        SQL の LIMIT ではなく Python 側で絞り込んでから件数を切る。
+        LIMIT 後に絞り込むと、範囲外のファイルだけがヒットしたバッチで
+        空リストが返り、範囲内の未解析ファイルが取り残されるため。
+        """
+        root_path = self.get_setting("root_path")
         with self.lock:
             try:
-                return self.conn.execute(
-                    "SELECT id, path, extension, size FROM files WHERE status = 'unprocessed' LIMIT ?",
-                    (limit,)).fetchall()
+                rows = self.conn.execute(
+                    "SELECT id, path, extension, size FROM files WHERE status = 'unprocessed'").fetchall()
             except sqlite3.Error as e:
                 logger.error(f"Failed to get unprocessed files: {e}")
                 return []
+        if root_path:
+            rows = [r for r in rows if path_under_root(r[1], root_path)]
+        return rows[:limit]
+
+    def get_root_scope_stats(self, root_path: str) -> dict:
+        """指定ルート配下（ゴミ箱を除く）の登録件数・解析状況を集計する。"""
+        with self.lock:
+            try:
+                rows = self.conn.execute(
+                    "SELECT path, status FROM files WHERE status != 'trash'").fetchall()
+            except sqlite3.Error as e:
+                logger.error(f"Failed to get root scope stats for {root_path}: {e}")
+                return {"total": 0, "analyzed": 0, "unprocessed": 0}
+        total = 0
+        unprocessed = 0
+        for path, status in rows:
+            if not path_under_root(path, root_path):
+                continue
+            total += 1
+            if status == "unprocessed":
+                unprocessed += 1
+        return {"total": total, "analyzed": total - unprocessed, "unprocessed": unprocessed}
+
+    def reset_analysis_under_root(self, root_path: str) -> int:
+        """指定ルート配下（ゴミ箱を除く）のファイルを未解析状態に戻す。再解析のテスト/やり直し用。"""
+        with self.lock:
+            try:
+                rows = self.conn.execute(
+                    "SELECT id, path FROM files WHERE status != 'trash'").fetchall()
+                ids = [fid for fid, path in rows if path_under_root(path, root_path)]
+                if not ids:
+                    return 0
+                placeholders = ",".join("?" for _ in ids)
+                self.conn.execute(
+                    f"UPDATE files SET status='unprocessed', hash_value=NULL, p_hash=NULL, "
+                    f"blur_score=NULL WHERE id IN ({placeholders})", ids)
+                self.conn.commit()
+                return len(ids)
+            except sqlite3.Error as e:
+                logger.error(f"Failed to reset analysis under root {root_path}: {e}")
+                raise
 
     @staticmethod
     def _content_type_for_extension(extension: str) -> str:
@@ -325,31 +398,44 @@ class DatabaseManager:
         return self._row_to_file_dict(row) if row else None
 
     def get_library_stats(self) -> dict:
+        """
+        現在の root_path 配下のファイルのみを集計する。
+        過去に別フォルダをスキャンした行が残っていても、現在のライブラリ（root_path）の
+        件数と一致しない表示にならないよう、root_path が設定されていればそれで絞り込む。
+        """
+        root_path = self.get_setting("root_path")
         with self.lock:
             try:
-                total = self.conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-                analyzed = self.conn.execute(
-                    "SELECT COUNT(*) FROM files WHERE status NOT IN ('unprocessed', 'trash')"
-                ).fetchone()[0]
-                unprocessed = self.conn.execute(
-                    "SELECT COUNT(*) FROM files WHERE status = 'unprocessed'"
-                ).fetchone()[0]
-                triaged = self.conn.execute(
-                    "SELECT COUNT(*) FROM files WHERE triage_status IS NOT NULL"
-                ).fetchone()[0]
-                trashed = self.conn.execute(
-                    "SELECT COUNT(*) FROM files WHERE status = 'trash'"
-                ).fetchone()[0]
+                rows = self.conn.execute(
+                    "SELECT path, status, triage_status FROM files").fetchall()
             except sqlite3.Error as e:
                 logger.error(f"Failed to get library stats: {e}")
-                return {"total": 0, "analyzed": 0, "unprocessed": 0, "triaged": 0, "trashed": 0, "root_path": None}
+                return {"total": 0, "analyzed": 0, "unprocessed": 0, "triaged": 0, "trashed": 0,
+                        "root_path": root_path}
+        total = analyzed = unprocessed = triaged = trashed = 0
+        for path, status, triage_status in rows:
+            # ゴミ箱はライブラリ横断で 1 つ（root_path の外にある）ため、
+            # root で絞らずに全件数える。Trash ページの表示件数と一致させる。
+            if status == "trash":
+                trashed += 1
+                continue
+            if root_path and not path_under_root(path, root_path):
+                continue
+            # total は現在のライブラリの「ゴミ箱以外」の件数（total == analyzed + unprocessed）
+            total += 1
+            if status == "unprocessed":
+                unprocessed += 1
+            else:
+                analyzed += 1
+            if triage_status is not None:
+                triaged += 1
         return {
             "total": total,
             "analyzed": analyzed,
             "unprocessed": unprocessed,
             "triaged": triaged,
             "trashed": trashed,
-            "root_path": self.get_setting("root_path"),
+            "root_path": root_path,
         }
 
     def get_files_page(
@@ -375,37 +461,45 @@ class DatabaseManager:
         if untriaged_only:
             clauses.append("triage_status IS NULL")
         where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        root_path = self.get_setting("root_path")
         with self.lock:
             try:
-                total = self.conn.execute(
-                    f"SELECT COUNT(*) FROM files {where_sql}", params
-                ).fetchone()[0]
                 rows = self.conn.execute(
-                    f"SELECT {self._FILE_COLUMNS} FROM files {where_sql} "
-                    f"ORDER BY id ASC LIMIT ? OFFSET ?",
-                    (*params, limit, (page - 1) * limit),
+                    f"SELECT {self._FILE_COLUMNS} FROM files {where_sql} ORDER BY id ASC", params
                 ).fetchall()
             except sqlite3.Error as e:
                 logger.error(f"Failed to get files page: {e}")
                 return {"page": page, "limit": limit, "total": 0, "items": []}
         items = [self._row_to_file_dict(row) for row in rows]
+        if root_path:
+            # ゴミ箱行は root_path の外（既定 ~/PhotoSortX_Trash）へ移動済みなので
+            # root で絞ると必ず全滅する。ゴミ箱はライブラリ横断で 1 つなので除外しない。
+            items = [item for item in items
+                     if item["status"] == "trash" or path_under_root(item["path"], root_path)]
         if content_type:
             items = [item for item in items if item["content_type"] == content_type]
-        return {"page": page, "limit": limit, "total": total, "items": items}
+        total = len(items)
+        start = (page - 1) * limit
+        return {"page": page, "limit": limit, "total": total, "items": items[start:start + limit]}
 
     def get_next_triage_file(self, after_id: int = 0) -> Optional[dict]:
+        root_path = self.get_setting("root_path")
         with self.lock:
             try:
-                row = self.conn.execute(
+                rows = self.conn.execute(
                     f"SELECT {self._FILE_COLUMNS} FROM files "
                     "WHERE id > ? AND status != 'trash' AND triage_status IS NULL "
-                    "ORDER BY id ASC LIMIT 1",
+                    "ORDER BY id ASC",
                     (after_id,),
-                ).fetchone()
+                ).fetchall()
             except sqlite3.Error as e:
                 logger.error(f"Failed to get next triage file after {after_id}: {e}")
                 return None
-        return self._row_to_file_dict(row) if row else None
+        for row in rows:
+            item = self._row_to_file_dict(row)
+            if not root_path or path_under_root(item["path"], root_path):
+                return item
+        return None
 
     def update_triage_status(self, fid: int, action: Optional[str]) -> bool:
         if action is not None and action not in {"keep", "discard", "skip"}:
@@ -439,21 +533,55 @@ class DatabaseManager:
                 logger.error(f"Failed to update analysis result for file_id {fid}: {e}")
                 raise
 
-    def get_duplicate_hashes(self, use_full_hash: bool = False):
-        """重複ハッシュグループを取得。use_full_hash=True のとき完全ハッシュで比較"""
-        col = 'full_hash' if use_full_hash else 'hash_value'
-        with self.lock:
-            return self.conn.execute(
-                f'SELECT {col}, COUNT(*) as cnt FROM files '
-                f'WHERE {col} IS NOT NULL AND status != "trash" '
-                f'GROUP BY {col} HAVING cnt > 1 ORDER BY cnt DESC').fetchall()
+    def get_duplicate_groups(self, use_full_hash: bool = False) -> List[Tuple[str, int, List[int]]]:
+        """
+        重複グループを (hash, size, [file_id, ...]) のリストで取得する。
 
-    def get_files_by_hash(self, val, use_full_hash: bool = False):
-        """指定ハッシュ値に一致するファイル一覧を取得"""
+        簡易ハッシュ (hash_value) は先頭 8KB の MD5 でしかないため、
+        同一ヘッダを持つ別ファイル（同一機種の動画・RAW など）が
+        簡単に衝突する。ハッシュ単独ではなく **(ハッシュ, ファイルサイズ)**
+        をキーにすることで、この誤検出を大幅に減らす。
+
+        グループ化は現在の root_path 配下のファイルのみを対象にする
+        （ライブラリ横断で数えると UI の件数と実体がずれるため）。
+        """
         col = 'full_hash' if use_full_hash else 'hash_value'
+        root_path = self.get_setting("root_path")
         with self.lock:
-            return self.conn.execute(
+            rows = self.conn.execute(
+                f"SELECT id, path, {col}, size FROM files "
+                f"WHERE {col} IS NOT NULL AND {col} != '' AND status != 'trash' "
+                f"ORDER BY id").fetchall()
+
+        buckets: Dict[Tuple[str, int], List[int]] = {}
+        for fid, path, hash_val, size in rows:
+            if root_path and not path_under_root(path, root_path):
+                continue
+            buckets.setdefault((hash_val, int(size or 0)), []).append(fid)
+
+        groups = [(h, size, ids) for (h, size), ids in buckets.items() if len(ids) > 1]
+        groups.sort(key=lambda g: len(g[2]), reverse=True)
+        return groups
+
+    def get_duplicate_hashes(self, use_full_hash: bool = False) -> List[Tuple[str, int, int]]:
+        """重複グループの (hash, size, 件数) 一覧。use_full_hash=True で完全ハッシュ比較"""
+        return [(h, size, len(ids)) for h, size, ids in self.get_duplicate_groups(use_full_hash)]
+
+    def get_files_by_hash(self, val, use_full_hash: bool = False, size: Optional[int] = None):
+        """指定ハッシュ値に一致するファイル一覧を取得（現在の root_path 配下のみ）
+
+        size を渡した場合はファイルサイズも一致するものだけに絞り込む。
+        """
+        col = 'full_hash' if use_full_hash else 'hash_value'
+        root_path = self.get_setting("root_path")
+        with self.lock:
+            rows = self.conn.execute(
                 f"SELECT id, path, size, mtime FROM files WHERE {col} = ? AND status != 'trash'", (val,)).fetchall()
+        if size is not None:
+            rows = [r for r in rows if int(r[2] or 0) == int(size)]
+        if root_path:
+            rows = [r for r in rows if path_under_root(r[1], root_path)]
+        return rows
 
     def update_full_hash(self, fid: int, full_hash: str) -> None:
         """完全ハッシュ値を個別に更新"""
@@ -464,17 +592,39 @@ class DatabaseManager:
             except sqlite3.Error as e:
                 logger.error(f"Failed to update full_hash for file_id {fid}: {e}")
 
-    def get_files_needing_full_hash(self, limit: int = 500) -> List[Tuple[int, str, int]]:
-        """完全ハッシュが未計算かつ簡易重複候補のファイル一覧を取得"""
+    def get_files_needing_full_hash(self, limit: int = 500,
+                                    quick_groups: Optional[List[Tuple[str, int, List[int]]]] = None
+                                    ) -> List[Tuple[int, str, int]]:
+        """完全ハッシュが未計算かつ簡易重複候補のファイル一覧を取得
+
+        候補判定は (簡易ハッシュ, サイズ) が一致するグループに限定する。
+        ハッシュだけで候補にすると、先頭 8KB が同じだけの無関係なファイルまで
+        全体 MD5 の対象になり、無駄な I/O が発生する。
+
+        quick_groups を渡すと簡易ハッシュのグループ化をやり直さない。
+        """
+        if quick_groups is None:
+            quick_groups = self.get_duplicate_groups(use_full_hash=False)
+        candidate_ids = [fid for _h, _size, ids in quick_groups for fid in ids]
+        if not candidate_ids:
+            return []
+        # SQLite のバインド変数上限を避けるためチャンク分割して問い合わせる
+        chunk_size = 500
+        rows: List[Tuple[int, str, int]] = []
         with self.lock:
-            return self.conn.execute(
-                "SELECT id, path, size FROM files "
-                "WHERE full_hash IS NULL AND hash_value IS NOT NULL AND status != 'trash' "
-                "AND hash_value IN ("
-                "  SELECT hash_value FROM files "
-                "  WHERE hash_value IS NOT NULL AND status != 'trash' "
-                "  GROUP BY hash_value HAVING COUNT(*) > 1"
-                ") ORDER BY size ASC LIMIT ?", (limit,)).fetchall()
+            for start in range(0, len(candidate_ids), chunk_size):
+                chunk = candidate_ids[start:start + chunk_size]
+                placeholders = ','.join('?' for _ in chunk)
+                rows.extend(self.conn.execute(
+                    f"SELECT id, path, size FROM files "
+                    f"WHERE full_hash IS NULL AND id IN ({placeholders})", chunk).fetchall())
+        rows.sort(key=lambda r: int(r[2] or 0))
+        return rows[:limit]
+
+    def count_files_needing_full_hash(self,
+                                      quick_groups: Optional[List[Tuple[str, int, List[int]]]] = None) -> int:
+        """完全ハッシュ未計算の重複候補ファイル数"""
+        return len(self.get_files_needing_full_hash(limit=1_000_000, quick_groups=quick_groups))
 
     def clear_full_hashes(self) -> None:
         """全ファイルの full_hash をクリア"""
@@ -485,48 +635,84 @@ class DatabaseManager:
             except sqlite3.Error as e:
                 logger.error(f"Failed to clear full hashes: {e}")
 
-    def get_blurry_files(self, th):
-        limit = config.BLUR_LIST_LIMIT
+    def get_blurry_files(self, th, limit: Optional[int] = None):
+        """ぼけ候補を (id, path) で返す。既定は config.BLUR_LIST_LIMIT 件で打ち切る。"""
+        return self._blurry_files_all(th)[:int(limit if limit is not None else config.BLUR_LIST_LIMIT)]
+
+    def count_blurry_files(self, th) -> int:
+        """打ち切り前のぼけ候補の総数（UI に「上限で省略された」旨を出すため）"""
+        return len(self._blurry_files_all(th))
+
+    def _blurry_files_all(self, th):
         # 動画ファイルを除外（blur_score=0 のまま登録されるため）
         video_exts = tuple(config.VIDEO_EXTENSIONS)
         placeholders = ','.join('?' for _ in video_exts)
+        root_path = self.get_setting("root_path")
         with self.lock:
             rows = self.conn.execute(
                 f'SELECT id, path, blur_score FROM files '
                 f'WHERE blur_score > 0 AND blur_score < ? AND status != "trash" '
                 f'AND extension NOT IN ({placeholders}) '
-                f'ORDER BY blur_score ASC LIMIT ?',
-                (th, *video_exts, limit)).fetchall()
-            return [(r[0], r[1]) for r in rows]
+                f'ORDER BY blur_score ASC',
+                (th, *video_exts)).fetchall()
+            items = [(r[0], r[1]) for r in rows]
+        if root_path:
+            items = [it for it in items if path_under_root(it[1], root_path)]
+        return items
 
     def get_small_files(self, max_size: int, limit: int = 5000):
-        """指定サイズ未満（バイト）のゴミ箱以外ファイルを (id, path, size) で返す。"""
+        """指定サイズ未満（バイト）のゴミ箱以外ファイルを (id, path, size) で返す（root_path 配下のみ）。"""
+        return self._small_files_all(max_size)[:int(limit)]
+
+    def count_small_files(self, max_size: int) -> int:
+        """打ち切り前の低容量ファイル総数"""
+        return len(self._small_files_all(max_size))
+
+    def _small_files_all(self, max_size: int):
+        root_path = self.get_setting("root_path")
         with self.lock:
             try:
                 rows = self.conn.execute(
                     "SELECT id, path, size FROM files "
                     "WHERE size < ? AND status != 'trash' "
-                    "ORDER BY size ASC LIMIT ?",
-                    (int(max_size), int(limit))).fetchall()
-                return [(r[0], r[1], r[2]) for r in rows]
+                    "ORDER BY size ASC",
+                    (int(max_size),)).fetchall()
+                items = [(r[0], r[1], r[2]) for r in rows]
             except sqlite3.Error as e:
                 logger.error(f"get_small_files error: {e}")
                 return []
+        if root_path:
+            items = [it for it in items if path_under_root(it[1], root_path)]
+        return items
 
     def get_files_with_phash(self):
+        """p_hash を持つファイルを返す。空文字（解析スキップ分）は候補にしない。"""
+        root_path = self.get_setting("root_path")
         with self.lock:
-            return self.conn.execute(
-                "SELECT id, path, p_hash, mtime, size FROM files WHERE p_hash IS NOT NULL AND status != 'trash'").fetchall()
+            rows = self.conn.execute(
+                "SELECT id, path, p_hash, mtime, size FROM files "
+                "WHERE p_hash IS NOT NULL AND p_hash != '' AND status != 'trash'").fetchall()
+        if root_path:
+            rows = [r for r in rows if path_under_root(r[1], root_path)]
+        return rows
 
     def get_all_files(self):
         with self.lock:
             return [r[0] for r in
                     self.conn.execute("SELECT path FROM files WHERE status != 'trash' ORDER BY mtime DESC").fetchall()]
 
-    def get_all_files_with_info(self):
+    def get_all_files_with_info(self, scoped_to_root: bool = True):
+        """
+        (id, path, timestamp) の一覧を撮影時刻順で返す。
+
+        既定では現在の root_path 配下のみ。スマート整理は実ファイルを移動するため、
+        過去に別フォルダをスキャンした行を巻き込むと他ライブラリのファイルまで動いてしまう。
+        """
+        root_path = self.get_setting("root_path") if scoped_to_root else None
         with self.lock:
             rows = self.conn.execute("SELECT id, path, mtime FROM files WHERE status != 'trash' ORDER BY mtime ASC").fetchall()
-            return [{'id': r[0], 'path': r[1], 'timestamp': r[2]} for r in rows]
+        return [{'id': r[0], 'path': r[1], 'timestamp': r[2]} for r in rows
+                if not root_path or path_under_root(r[1], root_path)]
 
     def get_files_in_folder(self, folder: str) -> List[Tuple[int, str, int, float]]:
         """指定フォルダ直下のファイルを取得 (id, path, size, mtime)"""
@@ -538,8 +724,14 @@ class DatabaseManager:
             return [(r[0], r[1], r[2], r[3]) for r in rows
                     if os.path.normpath(os.path.dirname(r[1])) == folder_norm]
 
-    def get_folder_tree(self) -> dict:
-        """全ファイルのパスからフォルダツリー構造を構築する"""
+    def get_folder_tree(self, scoped_to_root: bool = True) -> dict:
+        """
+        ファイルのパスからフォルダ → ファイル数のマップを構築する。
+
+        既定では現在の root_path 配下のみを対象にする。スコープしないと
+        過去にスキャンした別ライブラリのフォルダまで移動先候補に現れる。
+        """
+        root_path = self.get_setting("root_path") if scoped_to_root else None
         with self.lock:
             rows = self.conn.execute(
                 "SELECT path FROM files WHERE status != 'trash'"
@@ -547,6 +739,8 @@ class DatabaseManager:
         # フォルダ → ファイル数をカウント
         folder_counts: dict = {}
         for (path,) in rows:
+            if root_path and not path_under_root(path, root_path):
+                continue
             d = os.path.normpath(os.path.dirname(path))
             folder_counts[d] = folder_counts.get(d, 0) + 1
         return folder_counts

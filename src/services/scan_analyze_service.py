@@ -114,6 +114,23 @@ def run_scan(
     return {"stopped": False, "registered": registered}
 
 
+def count_disk_files(root_path: str) -> int:
+    """フォルダ配下の対象拡張子ファイル数をカウントする（DB登録は行わない、事前確認用）。"""
+    root = os.path.normpath(root_path)
+    count = 0
+    for current_root, _dirs, files in os.walk(root):
+        if config.TRASH_FOLDER_NAME in current_root:
+            continue
+        for filename in files:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in config.ALL_EXTENSIONS:
+                continue
+            full_path = os.path.normpath(os.path.join(current_root, filename))
+            if config.validate_path(full_path):
+                count += 1
+    return count
+
+
 def run_analyze(
     db: DatabaseManager,
     status_cb: Optional[StatusCallback] = None,
@@ -142,17 +159,17 @@ def run_analyze(
             if config.LOW_LOAD_MODE:
                 time.sleep(config.LOW_LOAD_SLEEP_TIME)
             if not os.path.exists(path):
-                db.update_analysis_result(fid, None, "", 0, "missing")
+                db.update_analysis_result(fid, None, None, 0, "missing")
                 done += 1
                 continue
             if size > config.MAX_FILE_SIZE_FOR_PROCESSING:
-                db.update_analysis_result(fid, None, "", 0, "skipped")
+                db.update_analysis_result(fid, None, None, 0, "skipped")
                 done += 1
                 continue
             try:
                 md5_hash = _head_md5(path)
                 blur = 0.0
-                phash = ""
+                phash = None
                 if ext in config.IMAGE_EXTENSIONS:
                     blur = _calc_blur(path)
                     phash = _calc_phash(path)
@@ -163,10 +180,10 @@ def run_analyze(
                     thumb = _build_video_thumbnail_bytes(path, config.DEFAULT_THUMBNAIL_SIZE)
                     if thumb:
                         db.save_thumbnail(fid, thumb)
-                db.update_analysis_result(fid, md5_hash, phash, blur)
+                db.update_analysis_result(fid, md5_hash, phash or None, blur)
             except Exception as exc:
                 logger.error("run_analyze failed for %s: %s", path, exc, exc_info=True)
-                db.update_analysis_result(fid, None, "", 0, "error")
+                db.update_analysis_result(fid, None, None, 0, "error")
             done += 1
             if done % config.PROGRESS_UPDATE_INTERVAL_ANALYZE == 0 or done == total:
                 elapsed = time.time() - started_at

@@ -7,7 +7,6 @@ PhotoSortX v3 API server.
 """
 from __future__ import annotations
 
-import asyncio
 import io
 import os
 import threading
@@ -16,7 +15,8 @@ from dataclasses import asdict, dataclass
 from typing import Literal, Optional
 
 import cv2
-from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+import numpy as np
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from PIL import Image, ImageOps
@@ -24,8 +24,9 @@ from PIL import Image, ImageOps
 from .config import config
 from .database import DatabaseManager
 from .services import organize_service
-from .services.scan_analyze_service import run_analyze, run_scan
-from .utils import hamming_dist
+from .services.duplicate_service import run_full_hash
+from .services.preprocess_service import run_preprocess
+from .services.scan_analyze_service import count_disk_files, run_analyze, run_scan
 
 
 TRIAGE_ACTIONS = {"keep", "discard", "skip"}
@@ -90,6 +91,7 @@ class JobState:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     error: Optional[str] = None
+    result: Optional[dict] = None
 
 
 class JobManager:
@@ -138,6 +140,10 @@ class JobManager:
             self._state.total = int(total)
             self._state.percent = int(current / total * 100) if total else 0
 
+    def set_result(self, result: dict) -> None:
+        with self._lock:
+            self._state.result = result
+
 
 db = DatabaseManager()
 jobs = JobManager()
@@ -156,6 +162,23 @@ def _run_scanner(root_path: str) -> None:
 
 def _run_analyzer() -> None:
     run_analyze(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
+
+
+def _run_preprocessor(root_path: str) -> None:
+    result = run_preprocess(root_path, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
+    jobs.set_result(result)
+    if not result.get("stopped"):
+        message = (
+            f"完了: Pictures {result['pictures']}件 / Movies {result['movies']}件 / "
+            f"Others {result['others']}件（移動{result['moved']}件・スキップ{result['skipped']}件・"
+            f"対象{result['total']}件）"
+        )
+        jobs.set_status(message)
+
+
+def _run_full_hash() -> None:
+    result = run_full_hash(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
+    jobs.set_result(result)
 
 
 def _image_preview_bytes(path: str, max_size: int = 1920) -> bytes:
@@ -197,29 +220,47 @@ def _video_preview_bytes(path: str, max_size: int) -> bytes:
         cap.release()
 
 
-def _similar_groups(distance: int, max_items: int) -> list[dict]:
-    rows = db.get_files_with_phash()[:max_items]
-    items = []
-    for fid, path, phash, _mtime, size in rows:
-        if not phash:
-            continue
+def _similar_groups(distance: int, max_items: int) -> tuple[list[dict], int, int]:
+    """
+    pHash のハミング距離が distance 以下の画像をグループ化する。
+
+    Returns:
+        (groups, scanned, available) — scanned は実際に比較した件数、
+        available は打ち切り前の候補総数。max_items で切られたことを UI に伝える。
+    """
+    all_rows = db.get_files_with_phash()
+    available = len(all_rows)
+    rows = all_rows[:max_items]
+
+    ids: list[int] = []
+    hashes: list[int] = []
+    for fid, _path, phash, _mtime, _size in rows:
         try:
-            items.append({"id": fid, "path": path, "hash": int(phash, 16), "size": size})
+            hashes.append(int(phash, 16))
         except (TypeError, ValueError):
             continue
+        ids.append(fid)
 
-    visited: set[int] = set()
+    scanned = len(ids)
+    if scanned == 0:
+        return [], 0, available
+
+    # 総当たりだが、XOR と popcount を numpy でベクトル化して 1 シード 1 回の演算にする。
+    # Python ループで hamming_dist を呼ぶと 5000 件で 2500 万回の関数呼び出しになる。
+    hash_arr = np.array(hashes, dtype=np.uint64)
+
+    visited = np.zeros(scanned, dtype=bool)
     groups: list[dict] = []
-    for item in items:
-        if item["id"] in visited:
+    for i in range(scanned):
+        if visited[i]:
             continue
-        members = [other for other in items if other["id"] not in visited and hamming_dist(item["hash"], other["hash"]) <= distance]
-        if len(members) < 2:
+        dist = np.bitwise_count(np.bitwise_xor(hash_arr, hash_arr[i]))
+        member_idx = np.flatnonzero((dist <= distance) & ~visited)
+        if member_idx.size < 2:
             continue
-        for member in members:
-            visited.add(member["id"])
-        groups.append(_group_payload(members))
-    return groups
+        visited[member_idx] = True
+        groups.append(_group_payload([{"id": ids[j]} for j in member_idx]))
+    return groups, scanned, available
 
 
 def _group_payload(members: list[dict]) -> dict:
@@ -258,6 +299,10 @@ def scan_start(payload: ScanStartRequest) -> dict:
     root_path = os.path.normpath(payload.root_path)
     if not os.path.isdir(root_path):
         raise HTTPException(status_code=400, detail="root_path is not a directory")
+    # 走査完了を待たずに現在のライブラリを切り替える。
+    # 完了時にしか保存しないと、途中でエラー/中断したときに
+    # フォルダを変えたのに Home が前のライブラリを表示し続けてしまう。
+    db.set_setting("root_path", root_path)
     try:
         jobs.start("scan", _run_scanner, root_path)
     except RuntimeError as exc:
@@ -270,10 +315,51 @@ def scan_status() -> dict:
     return jobs.snapshot()
 
 
+@app.post("/api/preprocess/start")
+def preprocess_start(payload: ScanStartRequest) -> dict:
+    root_path = os.path.normpath(payload.root_path)
+    if not os.path.isdir(root_path):
+        raise HTTPException(status_code=400, detail="root_path is not a directory")
+    try:
+        jobs.start("preprocess", _run_preprocessor, root_path)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return jobs.snapshot()
+
+
+@app.get("/api/scan/check")
+def scan_check(root_path: str) -> dict:
+    root = os.path.normpath(root_path)
+    valid = os.path.isdir(root)
+    stats = db.get_root_scope_stats(root)
+    disk_count = count_disk_files(root) if valid else 0
+    return {
+        "root_path": root,
+        "valid": valid,
+        "disk_count": disk_count,
+        **stats,
+        "already_up_to_date": stats["total"] > 0 and stats["unprocessed"] == 0,
+    }
+
+
+@app.post("/api/analyze/reset")
+def analyze_reset(payload: ScanStartRequest) -> dict:
+    if jobs.snapshot()["running"]:
+        raise HTTPException(status_code=409, detail="job is already running")
+    root = os.path.normpath(payload.root_path)
+    reset_count = db.reset_analysis_under_root(root)
+    return {"reset": reset_count}
+
+
 @app.post("/api/analyze/start")
 def analyze_start() -> dict:
     if db.get_unprocessed_count() == 0:
-        return {"started": False, "message": "解析対象のファイルがありません。", "job": jobs.snapshot()}
+        stats = db.get_library_stats()
+        if stats["total"] == 0:
+            message = "登録されたファイルがありません。先にフォルダをスキャンしてください。"
+        else:
+            message = f"解析対象はありません。登録済み{stats['total']}件はすべて解析済みです。"
+        return {"started": False, "message": message, "job": jobs.snapshot()}
     try:
         jobs.start("analyze", _run_analyzer)
     except RuntimeError as exc:
@@ -422,9 +508,19 @@ def permanent_delete(file_id: int) -> dict:
 
 @app.get("/api/folders")
 def folders() -> dict:
+    """
+    移動先候補のフォルダ一覧。
+
+    UI 側でツリー表示するため、パス一覧に加えてライブラリのルートと
+    フォルダごとのファイル数も返す（get_folder_tree は元々件数を持っている）。
+    """
     tree = db.get_folder_tree()
     folder_list = sorted(tree.keys())
-    return {"folders": folder_list}
+    return {
+        "folders": folder_list,
+        "root_path": db.get_setting("root_path"),
+        "counts": tree,
+    }
 
 
 @app.post("/api/folders")
@@ -485,31 +581,74 @@ def triage_next(after_id: int = Query(0, ge=0)) -> dict:
 
 @app.get("/api/duplicates")
 def duplicates(use_full_hash: bool = False) -> dict:
+    # 簡易ハッシュのグループは pending_full_hash の算出にも使うので一度だけ計算する
+    quick_groups = db.get_duplicate_groups(use_full_hash=False)
+    raw_groups = db.get_duplicate_groups(use_full_hash=True) if use_full_hash else quick_groups
+
     groups = []
-    for hash_value, count in db.get_duplicate_hashes(use_full_hash=use_full_hash):
-        rows = db.get_files_by_hash(hash_value, use_full_hash=use_full_hash)
+    for hash_value, size, ids in raw_groups:
+        items = [row for fid in ids if (row := db.get_file_by_id(fid))]
+        if len(items) < 2:
+            continue
         groups.append({
+            # 同じ簡易ハッシュでもサイズが異なれば別グループなので、
+            # UI 側のキーにはハッシュとサイズの組を使う。
+            "key": f"{hash_value}:{size}",
             "hash": hash_value,
-            "count": count,
-            "items": [db.get_file_by_id(row[0]) for row in rows],
+            "size": size,
+            "count": len(items),
+            "items": items,
         })
-    return {"groups": groups}
+    return {
+        "groups": groups,
+        "use_full_hash": use_full_hash,
+        # 「完全 (精密)」は full_hash 列が埋まっていないと常に 0 件になる。
+        # UI が計算ジョブを促せるように未計算件数を返す。
+        "pending_full_hash": db.count_files_needing_full_hash(quick_groups=quick_groups),
+    }
+
+
+@app.post("/api/duplicates/full-hash/start")
+def duplicates_full_hash_start() -> dict:
+    pending = db.count_files_needing_full_hash()
+    if pending == 0:
+        return {"started": False, "pending": 0, "message": "完全ハッシュの計算対象はありません。", "job": jobs.snapshot()}
+    try:
+        jobs.start("full_hash", _run_full_hash)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"started": True, "pending": pending, "job": jobs.snapshot()}
 
 
 @app.get("/api/blurry")
 def blurry(threshold: int = Query(config.DEFAULT_BLUR_THRESHOLD, ge=1, le=1000)) -> dict:
     rows = db.get_blurry_files(threshold)
-    return {"items": [db.get_file_by_id(fid) for fid, _path in rows]}
+    available = db.count_blurry_files(threshold)
+    return {
+        "items": [db.get_file_by_id(fid) for fid, _path in rows],
+        # 上限で打ち切られたことを UI に伝える（黙って省略しない）
+        "available": available,
+        "limit": config.BLUR_LIST_LIMIT,
+        "truncated": available > len(rows),
+    }
 
 
 @app.get("/api/tiny")
 def tiny_files(
     max_size_kb: int = Query(config.MIN_FILE_SIZE_THRESHOLD // 1024, ge=1, le=1_000_000),
+    limit: int = Query(5000, ge=1, le=50000),
 ) -> dict:
     max_size = max_size_kb * 1024
-    rows = db.get_small_files(max_size)
+    rows = db.get_small_files(max_size, limit=limit)
+    available = db.count_small_files(max_size)
     items = [row for fid, _path, _size in rows if (row := db.get_file_by_id(fid))]
-    return {"max_size_kb": max_size_kb, "items": items}
+    return {
+        "max_size_kb": max_size_kb,
+        "items": items,
+        "available": available,
+        "limit": limit,
+        "truncated": available > len(rows),
+    }
 
 
 @app.get("/api/similar")
@@ -517,8 +656,15 @@ def similar(
     distance: int = Query(config.DEFAULT_SIMILARITY_THRESHOLD, ge=0, le=config.MAX_SIMILARITY_DISTANCE),
     max_items: int = Query(5000, ge=1, le=50000),
 ) -> dict:
-    groups = _similar_groups(distance, max_items)
-    return {"distance": distance, "groups": groups}
+    groups, scanned, available = _similar_groups(distance, max_items)
+    return {
+        "distance": distance,
+        "groups": groups,
+        "scanned": scanned,
+        "available": available,
+        "limit": max_items,
+        "truncated": available > scanned,
+    }
 
 
 @app.get("/api/similar/{group_id}/best")
@@ -573,17 +719,6 @@ def organize_apply(payload: OrganizeApplyRequest) -> dict:
         status_cb=jobs.set_status,
     )
     return {"ok": True, **result}
-
-
-@app.websocket("/ws/progress")
-async def progress_ws(websocket: WebSocket) -> None:
-    await websocket.accept()
-    try:
-        while True:
-            await websocket.send_json(jobs.snapshot())
-            await asyncio.sleep(1.0)
-    except WebSocketDisconnect:
-        return
 
 
 def main() -> None:

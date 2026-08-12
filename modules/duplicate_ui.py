@@ -267,9 +267,9 @@ class DuplicatePage(QWidget):
                 mode_text = "完全ハッシュ" if self.use_full_hash else "簡易ハッシュ"
                 self.list.addItem(f"重複なし（{mode_text}）")
                 return
-            for h, cnt in hashes:
+            for h, size, cnt in hashes:
                 item = QListWidgetItem(f"重複 {cnt}枚")
-                item.setData(Qt.ItemDataRole.UserRole, h)
+                item.setData(Qt.ItemDataRole.UserRole, (h, size))
                 self.list.addItem(item)
         except Exception as e:
             logger.error(f"Load error: {e}")
@@ -277,12 +277,13 @@ class DuplicatePage(QWidget):
     def on_group_selected(self, item):
         if not item:  # currentItemChangedはNoneを送ることがある
             return
-        h = item.data(Qt.ItemDataRole.UserRole)
-        if not h: return
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if not data: return
+        h, size = data
 
         try:
-            # データ取得
-            files = self.db.get_files_by_hash(h, use_full_hash=self.use_full_hash)
+            # データ取得（同一ハッシュでもサイズ違いは別グループ）
+            files = self.db.get_files_by_hash(h, use_full_hash=self.use_full_hash, size=size)
             # 辞書形式に変換して保持
             self.current_group_data = [{'id': f[0], 'path': f[1], 'size': f[2], 'mtime': f[3]} for f in files]
             # ファイルサイズの大きい順にソート
