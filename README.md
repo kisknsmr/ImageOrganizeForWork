@@ -70,6 +70,81 @@ python main.py
 photosortx
 ```
 
+## デスクトップアプリ（Tauri + React 版）
+
+`app/` にある新しい UI です。PyQt 版と同じ SQLite（`photos.db`）を、FastAPI
+（`src/api_server.py`）経由で共有します。
+
+### 構成
+
+```
+PhotoSortX.exe (Tauri)
+  └─ 起動時に .venv の python で uvicorn を子プロセス起動（127.0.0.1:8765）
+       └─ アプリ終了時に自動で停止
+```
+
+`:8765` で既にサーバーが応答している場合は**二重起動せず、それを使います**。
+
+### 初回セットアップ
+
+```bash
+# 1. Python 側（リポジトリ直下）
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+
+# 2. フロントエンド
+cd app
+npm install
+```
+
+Rust ツールチェイン（`rustup`）と Node.js が必要です。
+
+### 日常の起動
+
+インストール済みなら、スタートメニューの **PhotoSortX** から起動します。
+バックエンドの起動・停止は不要です（アプリが面倒を見ます）。
+
+開発中は次で起動します。
+
+```bash
+cd app
+npm run tauri dev
+```
+
+### ビルド（インストーラ作成）
+
+```bash
+cd app
+npm run tauri build
+```
+
+`app/src-tauri/target/release/bundle/` に `.msi` / `.exe` が出力されます。
+
+> **リポジトリの場所は固定してください。** 実行ファイルは Python バックエンドを
+> 同梱していません。リポジトリ直下の `.venv` と `src/` を参照して動きます。
+> リポジトリを移動した場合は、環境変数 `PHOTOSORTX_ROOT` に新しいパスを設定するか、
+> 再ビルドしてください。
+
+### バックエンドを更新したとき
+
+`src/` の Python を変更したら、**残っている uvicorn を止めてから**アプリを起動し直して
+ください。生きているサーバーがあるとアプリはそれを再利用するため、古いコードが
+そのまま使われ続けます。
+
+```bash
+# 8765 を掴んでいるプロセスを確認して停止
+netstat -ano | findstr 8765
+taskkill /PID <PID> /F
+```
+
+### トラブルシューティング（Tauri 版）
+
+| 現象 | 確認 |
+|------|------|
+| 起動画面が「バックエンドが応答しません」のまま | `.venv` の有無、`requirements.txt` の導入、ポート 8765 の競合 |
+| 変更したはずの API 挙動が古い | 上記「バックエンドを更新したとき」。古い uvicorn が生き残っている |
+| フォルダ一覧に無関係なフォルダが出る | 現在の `root_path` 配下だけが対象。Home で対象フォルダを選び直して Scan |
+
 ## ログ
 
 `src/config.py` の `LOG_LEVEL`（既定は `DEBUG`）と `LOG_FILE`（既定 `debug.log`）で制御します。ローテーション付きファイル出力とコンソール出力を使い分けます。本番利用時は `INFO` などへの変更を推奨します。

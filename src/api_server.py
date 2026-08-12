@@ -396,12 +396,30 @@ def file_detail(file_id: int) -> dict:
     return row
 
 
+#: Web UI のサムネイル生成サイズ。UI 側のサイズスライダ上限(280px)で
+#: 破綻しない解像度にする（PyQt 版が保存する 120px より大きい）。
+WEB_THUMBNAIL_SIZE = 320
+
+#: サムネイルは内容から決まるので、ある程度キャッシュさせて再取得を減らす。
+_THUMB_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600"}
+
+
 @app.get("/api/files/{file_id}/thumbnail")
 def file_thumbnail(file_id: int) -> Response:
+    """
+    サムネイルを返す。無ければその場で生成して保存する。
+
+    サムネイルは解析(Analyze)時にしか作られないため、未解析のライブラリでは
+    一覧が壊れ画像で埋まっていた。初回だけ生成コストを払い、以降は DB から返す。
+    """
     blob = db.get_thumbnail(file_id)
     if not blob:
-        raise HTTPException(status_code=404, detail="thumbnail not found")
-    return Response(content=blob, media_type="image/jpeg")
+        row = db.get_file_by_id(file_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="file not found")
+        blob = _image_preview_bytes(row["path"], WEB_THUMBNAIL_SIZE)
+        db.save_thumbnail(file_id, blob)
+    return Response(content=blob, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
 
 @app.get("/api/files/{file_id}/preview")
@@ -409,7 +427,11 @@ def file_preview(file_id: int, max_size: int = Query(1920, ge=320, le=4096)) -> 
     row = db.get_file_by_id(file_id)
     if not row:
         raise HTTPException(status_code=404, detail="file not found")
-    return Response(content=_image_preview_bytes(row["path"], max_size), media_type="image/jpeg")
+    return Response(
+        content=_image_preview_bytes(row["path"], max_size),
+        media_type="image/jpeg",
+        headers=_THUMB_CACHE_HEADERS,
+    )
 
 
 @app.post("/api/files/{file_id}/triage")

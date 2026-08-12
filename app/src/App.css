@@ -1533,6 +1533,82 @@ progress:not([value]) {
   color: var(--md-on-surface-variant);
 }
 
+/* --- 起動画面（バックエンド待ち）-------------------------------------- */
+
+.startup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: var(--sp-6);
+  background: var(--md-surface);
+}
+
+.startup-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  width: min(560px, 100%);
+  padding: var(--sp-8);
+  border-radius: var(--md-shape-xl);
+  background: var(--md-surface-container-low);
+  outline: 1px solid var(--md-outline-variant);
+  outline-offset: -1px;
+  text-align: center;
+}
+
+.startup-title {
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 500;
+  color: var(--md-on-surface);
+}
+
+.startup-message {
+  color: var(--md-on-surface-variant);
+}
+
+.startup-progress {
+  width: 220px;
+}
+
+.startup-hint {
+  font-size: 12px;
+  color: var(--md-outline);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 異常時の案内は読ませる情報なので左揃えにする */
+.startup-help {
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-4);
+  border-radius: var(--md-shape-md);
+  background: var(--md-surface-container);
+  color: var(--md-on-surface-variant);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.startup-help ol {
+  margin: var(--sp-2) 0 0;
+  padding-left: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.startup-help code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: var(--md-shape-xs);
+  background: var(--md-surface-container-highest);
+  color: var(--md-on-surface);
+  overflow-wrap: anywhere;
+}
+
 /* --- page transition -------------------------------------------------- */
 
 @keyframes ps-page-fade-in {

@@ -22,8 +22,38 @@ fn backend_already_running() -> bool {
     }
 }
 
-/// app/src-tauri（コンパイル時パス）からリポジトリルートを求める。
+/// そのディレクトリが PhotoSortX のリポジトリルートに見えるか。
+fn looks_like_repo(path: &PathBuf) -> bool {
+    path.join("src").join("api_server.py").exists()
+}
+
+/// リポジトリルートを決める。
+///
+/// 1. 環境変数 PHOTOSORTX_ROOT（リポジトリを移動した場合の逃げ道）
+/// 2. 実行ファイルの位置から上へ辿る（配布レイアウト向け）
+/// 3. コンパイル時の app/src-tauri から 2 つ上（開発時の既定）
 fn repo_root() -> PathBuf {
+    if let Ok(from_env) = std::env::var("PHOTOSORTX_ROOT") {
+        let candidate = PathBuf::from(from_env);
+        if looks_like_repo(&candidate) {
+            return candidate;
+        }
+        eprintln!(
+            "[backend] PHOTOSORTX_ROOT が指す場所に src/api_server.py がありません: {}",
+            candidate.display()
+        );
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        let mut dir = exe.parent().map(|p| p.to_path_buf());
+        while let Some(candidate) = dir {
+            if looks_like_repo(&candidate) {
+                return candidate;
+            }
+            dir = candidate.parent().map(|p| p.to_path_buf());
+        }
+    }
+
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent() // app
         .and_then(|p| p.parent()) // repo root

@@ -1,6 +1,7 @@
 import './App.css'
 import { useEffect, useRef } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { BackendGate } from './components/BackendGate'
 import { Sidebar } from './components/Sidebar'
 import { ToastProvider } from './components/Toast'
 import { AiOrganizePage } from './pages/AiOrganizePage'
@@ -64,10 +65,12 @@ function App() {
   return (
     <HashRouter>
       <ToastProvider>
-        <div className="app-shell">
-          <Sidebar />
-          <ContentRegion />
-        </div>
+        <BackendGate>
+          <div className="app-shell">
+            <Sidebar />
+            <ContentRegion />
+          </div>
+        </BackendGate>
       </ToastProvider>
     </HashRouter>
   )
