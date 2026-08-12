@@ -321,6 +321,22 @@
   box-shadow: var(--md-elevation-0);
 }
 
+/* 見出しと、その右端に置く操作（閉じる等）を並べる */
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.card-header > h3 {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  color: inherit;
+}
+
 .card > h3 {
   font-size: 14px;
   line-height: 20px;

@@ -13,7 +13,7 @@ from src.services.preprocess_service import (
     MOVIES_DIR,
     OTHERS_DIR,
     PICTURES_DIR,
-    count_targets,
+    summarize_folder,
     run_preprocess,
 )
 
@@ -50,14 +50,17 @@ class TestRunPreprocess(unittest.TestCase):
         self._touch(f"{PICTURES_DIR}/sub/done2.jpg")
         self._touch(f"{MOVIES_DIR}/done.mp4")
 
-        preview = count_targets(self.temp_dir)
+        preview = summarize_folder(self.temp_dir)
         result = run_preprocess(self.temp_dir)
 
-        self.assertEqual(preview["total"], result["total"])
-        self.assertEqual(preview["pictures"], result["pictures"])
-        self.assertEqual(preview["movies"], result["movies"])
-        self.assertEqual(preview["others"], result["others"])
+        for key in ("all_files", "total", "already_sorted", "pictures", "movies", "others"):
+            self.assertEqual(preview[key], result[key], f"{key} が事前カウントと結果で食い違う")
+
+        # 全ファイル = 振り分け対象 + 対応不要 が成り立つこと
+        self.assertEqual(preview["all_files"], preview["total"] + preview["already_sorted"])
+        self.assertEqual(preview["all_files"], 8)
         self.assertEqual(preview["total"], 5)
+        self.assertEqual(preview["already_sorted"], 3)
         self.assertEqual(preview["pictures"], 3)
         self.assertEqual(preview["movies"], 1)
         self.assertEqual(preview["others"], 1)
@@ -66,7 +69,11 @@ class TestRunPreprocess(unittest.TestCase):
         """振り分け後に再度数えると 0 になること（再実行しても対象が残らない）"""
         self._touch("loose/a.jpg")
         run_preprocess(self.temp_dir)
-        self.assertEqual(count_targets(self.temp_dir)["total"], 0)
+        after = summarize_folder(self.temp_dir)
+        self.assertEqual(after["total"], 0)
+        # 消えたわけではなく「対応不要」に移っただけ
+        self.assertEqual(after["all_files"], 1)
+        self.assertEqual(after["already_sorted"], 1)
 
     def test_sorts_by_category_preserving_structure(self):
         self._touch("Event1/photo.jpg")
@@ -93,7 +100,9 @@ class TestRunPreprocess(unittest.TestCase):
         result = run_preprocess(self.temp_dir)
         self.assertEqual(
             result,
-            {"stopped": False, "moved": 0, "skipped": 0, "total": 0, "pictures": 0, "movies": 0, "others": 0},
+            {"stopped": False, "moved": 0, "skipped": 0, "total": 0,
+             "all_files": 0, "already_sorted": 0,
+             "pictures": 0, "movies": 0, "others": 0},
         )
 
     def test_rerun_is_idempotent(self):
@@ -124,6 +133,9 @@ class TestRunPreprocess(unittest.TestCase):
         self._touch(f"{config.TRASH_FOLDER_NAME}/old.jpg")
         result = run_preprocess(self.temp_dir)
         self.assertEqual(result["total"], 0)
+        # ゴミ箱の中身は「全ファイル」にも「対応不要」にも数えない
+        self.assertEqual(result["all_files"], 0)
+        self.assertEqual(result["already_sorted"], 0)
 
     def test_stop_flag_halts_early(self):
         self._touch("a.jpg")

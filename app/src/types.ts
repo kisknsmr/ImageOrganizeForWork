@@ -2,7 +2,12 @@ export type PreprocessResult = {
   stopped: boolean
   moved: number
   skipped: number
+  /** 振り分け対象の件数 */
   total: number
+  /** フォルダ内の全ファイル数（ゴミ箱を除く）= total + already_sorted */
+  all_files: number
+  /** 既にカテゴリフォルダ内にあり、動かす必要がなかった件数 */
+  already_sorted: number
   pictures: number
   movies: number
   others: number
@@ -188,7 +193,12 @@ export type LibraryClearResult = {
 export type PreprocessCheck = {
   root_path: string
   valid: boolean
+  /** フォルダ内の全ファイル数（ゴミ箱を除く）= total + already_sorted */
+  all_files: number
+  /** 振り分け対象 */
   total: number
+  /** 既にカテゴリフォルダ内にあり、動かす必要がない件数 */
+  already_sorted: number
   pictures: number
   movies: number
   others: number

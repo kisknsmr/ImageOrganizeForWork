@@ -54,6 +54,8 @@ export const api = {
   scanStart: (rootPath: string) =>
     request<ScanJob>('/api/scan/start', { method: 'POST', body: JSON.stringify({ root_path: rootPath }) }),
   scanStatus: () => request<ScanJob>('/api/scan/status'),
+  /** 直前のジョブ結果の表示を消す（実行中は 409） */
+  jobsReset: () => request<ScanJob>('/api/jobs/reset', { method: 'POST' }),
   scanCheck: (rootPath: string) =>
     request<ScanCheck>(`/api/scan/check?root_path=${encodeURIComponent(rootPath)}`),
   analyzeStart: () => request<{ started: boolean; message?: string; job: ScanJob }>('/api/analyze/start', { method: 'POST' }),

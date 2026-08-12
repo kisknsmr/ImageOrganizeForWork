@@ -25,7 +25,7 @@ from .config import config
 from .database import DatabaseManager
 from .services import organize_service
 from .services.duplicate_service import run_full_hash
-from .services.preprocess_service import count_targets, run_preprocess
+from .services.preprocess_service import run_preprocess, summarize_folder
 from .services.scan_analyze_service import count_disk_files, run_analyze, run_scan
 
 
@@ -146,6 +146,19 @@ class JobManager:
             self._state.total = int(total)
             self._state.percent = int(current / total * 100) if total else 0
 
+    def reset(self) -> bool:
+        """
+        完了済みジョブの結果を破棄して待機中に戻す。
+
+        結果を保持したままだと、画面に前回の実行結果がいつまでも残り続ける。
+        実行中は破棄しない（進捗表示が消えてしまうため）。
+        """
+        with self._lock:
+            if self._state.running:
+                return False
+            self._state = JobState()
+            return True
+
     def set_result(self, result: dict) -> None:
         with self._lock:
             self._state.result = result
@@ -175,9 +188,9 @@ def _run_preprocessor(root_path: str) -> None:
     jobs.set_result(result)
     if not result.get("stopped"):
         message = (
-            f"完了: Pictures {result['pictures']}件 / Movies {result['movies']}件 / "
-            f"Others {result['others']}件（移動{result['moved']}件・スキップ{result['skipped']}件・"
-            f"対象{result['total']}件）"
+            f"完了: 全{result['all_files']}件中 移動{result['moved']}件"
+            f"（Pictures {result['pictures']} / Movies {result['movies']} / Others {result['others']}）"
+            f"・対応不要{result['already_sorted']}件・スキップ{result['skipped']}件"
         )
         jobs.set_status(message)
 
@@ -333,6 +346,14 @@ def preprocess_start(payload: ScanStartRequest) -> dict:
     return jobs.snapshot()
 
 
+@app.post("/api/jobs/reset")
+def jobs_reset() -> dict:
+    """直前のジョブ結果の表示を消す（実行中は不可）。"""
+    if not jobs.reset():
+        raise HTTPException(status_code=409, detail="job is still running")
+    return jobs.snapshot()
+
+
 @app.get("/api/preprocess/check")
 def preprocess_check(root_path: str) -> dict:
     """
@@ -345,9 +366,9 @@ def preprocess_check(root_path: str) -> dict:
     root = os.path.normpath(root_path)
     valid = os.path.isdir(root)
     if not valid:
-        return {"root_path": root, "valid": False, "total": 0,
-                "pictures": 0, "movies": 0, "others": 0}
-    return {"root_path": root, "valid": True, **count_targets(root)}
+        return {"root_path": root, "valid": False, "all_files": 0, "total": 0,
+                "already_sorted": 0, "pictures": 0, "movies": 0, "others": 0}
+    return {"root_path": root, "valid": True, **summarize_folder(root)}
 
 
 @app.get("/api/scan/check")

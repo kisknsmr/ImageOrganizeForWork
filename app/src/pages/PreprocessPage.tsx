@@ -33,6 +33,15 @@ export function PreprocessPage() {
     },
   })
 
+  // 完了したジョブの結果はサーバー側に残り続けるので、明示的に破棄できるようにする
+  const dismissResult = useMutation({
+    mutationFn: api.jobsReset,
+    onSuccess: () => refetchStatus(),
+    onError: (error) => {
+      toast.error(getApiErrorMessage(error), '結果表示を消せませんでした')
+    },
+  })
+
   const busy = startPreprocess.isPending || jobRunning
 
   return (
@@ -67,29 +76,48 @@ export function PreprocessPage() {
       )}
       {!jobRunning && status.data?.kind === 'preprocess' && status.data?.result && (
         <article className="card result-card">
-          <h3>振り分け結果</h3>
+          <div className="card-header">
+            <h3>振り分け結果</h3>
+            <button
+              type="button"
+              className="icon-button"
+              title="この結果表示を消す"
+              aria-label="結果を閉じる"
+              disabled={dismissResult.isPending}
+              onClick={() => dismissResult.mutate()}
+            >
+              ×
+            </button>
+          </div>
+          {/* フォルダ全体を「移動した / 対応不要 / スキップ」に分解して示す。
+              内訳の合計が全ファイル数と一致するので、数字を突き合わせられる */}
           <div className="card-grid">
             <div>
-              <p className="kpi-label">Pictures</p>
-              <p className="stat-value">{status.data.result.pictures}</p>
+              <p className="kpi-label">全ファイル</p>
+              <p className="stat-value">{status.data.result.all_files.toLocaleString()}</p>
             </div>
             <div>
-              <p className="kpi-label">Movies</p>
-              <p className="stat-value">{status.data.result.movies}</p>
+              <p className="kpi-label">移動した</p>
+              <p className="stat-value">{status.data.result.moved.toLocaleString()}</p>
             </div>
             <div>
-              <p className="kpi-label">Others</p>
-              <p className="stat-value">{status.data.result.others}</p>
+              <p className="kpi-label">対応不要</p>
+              <p className="stat-value">{status.data.result.already_sorted.toLocaleString()}</p>
             </div>
             <div>
-              <p className="kpi-label">Skipped</p>
-              <p className="stat-value">{status.data.result.skipped}</p>
+              <p className="kpi-label">スキップ</p>
+              <p className="stat-value">{status.data.result.skipped.toLocaleString()}</p>
             </div>
           </div>
           <p className="muted">
-            対象{status.data.result.total}件中、{status.data.result.moved}件を移動しました
+            移動の内訳: Pictures {status.data.result.pictures.toLocaleString()} ・ Movies{' '}
+            {status.data.result.movies.toLocaleString()} ・ Others{' '}
+            {status.data.result.others.toLocaleString()}
+            {status.data.result.already_sorted > 0
+              ? `。対応不要 ${status.data.result.already_sorted.toLocaleString()}件は既に振り分け済みのファイルです`
+              : ''}
             {status.data.result.skipped > 0
-              ? `（同名ファイルが既にあり${status.data.result.skipped}件はスキップしました）`
+              ? `。スキップ ${status.data.result.skipped.toLocaleString()}件は移動先に同名ファイルがありました`
               : ''}
             。
           </p>

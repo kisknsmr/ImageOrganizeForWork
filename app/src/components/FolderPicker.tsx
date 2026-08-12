@@ -101,10 +101,12 @@ export function FolderPicker({
           {check.isFetching ? 'ファイル数を確認中...' : null}
           {!check.isFetching && check.data && !check.data.valid ? 'フォルダが見つかりません' : null}
           {!check.isFetching && preprocessCheck.data?.valid && countMode === 'preprocess'
-            ? `振り分け対象 ${preprocessCheck.data.total.toLocaleString()} 件` +
-              `（画像 ${preprocessCheck.data.pictures.toLocaleString()} / ` +
-              `動画 ${preprocessCheck.data.movies.toLocaleString()} / ` +
-              `その他 ${preprocessCheck.data.others.toLocaleString()}）`
+            ? `全 ${preprocessCheck.data.all_files.toLocaleString()} 件` +
+              ` ／ 振り分け対象 ${preprocessCheck.data.total.toLocaleString()} 件` +
+              `（画像 ${preprocessCheck.data.pictures.toLocaleString()} ・ ` +
+              `動画 ${preprocessCheck.data.movies.toLocaleString()} ・ ` +
+              `その他 ${preprocessCheck.data.others.toLocaleString()}）` +
+              ` ／ 対応不要 ${preprocessCheck.data.already_sorted.toLocaleString()} 件`
             : null}
           {!check.isFetching && scanCheck.data?.valid && countMode === 'scan'
             ? `${scanCheck.data.disk_count.toLocaleString()}件のファイルが見つかりました` +
