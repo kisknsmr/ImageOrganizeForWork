@@ -203,3 +203,18 @@ export type PreprocessCheck = {
   movies: number
   others: number
 }
+
+/** GET /api/files/{id}/info — プレビューペイン用のファイル詳細 */
+export type FileInfo = {
+  id: number
+  path: string
+  filename: string
+  extension: string
+  content_type: string
+  /** ディスク上に実在するか。false ならサイズ・寸法は当てにならない */
+  exists: boolean
+  size: number
+  mtime: number
+  width: number | null
+  height: number | null
+}

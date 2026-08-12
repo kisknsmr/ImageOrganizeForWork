@@ -7,11 +7,7 @@ import { TruncationNotice } from '../components/TruncationNotice'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useViewMode } from '../hooks/useViewMode'
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  return `${(bytes / 1024).toFixed(1)} KB`
-}
+import { formatFileSize } from '../utils/format'
 
 export function TinyFilesPage() {
   const toast = useToast()
@@ -141,7 +137,7 @@ export function TinyFilesPage() {
               />
               <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
               <span>{item.filename}</span>
-              <p className="thumb-meta">{formatSize(item.size)}</p>
+              <p className="thumb-meta">{formatFileSize(item.size)}</p>
             </label>
           ))}
       </div>

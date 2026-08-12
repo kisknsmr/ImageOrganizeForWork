@@ -449,8 +449,9 @@
   gap: var(--sp-4);
 }
 
+/* フォルダパネルはプレビューを置き換えず、3 列目として足す */
 .gallery-layout.with-folder {
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px) minmax(240px, 300px);
 }
 
 /*
@@ -476,6 +477,58 @@
 
 .preview-pane {
   overflow-y: auto;
+}
+
+.preview-filename {
+  overflow-wrap: anywhere;
+}
+
+/* ファイル情報。ラベルと値を 2 列に揃えて読み取りやすくする */
+.preview-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: var(--sp-3);
+  border-radius: var(--md-shape-md);
+  background: var(--md-surface-container);
+}
+
+.preview-row {
+  display: grid;
+  grid-template-columns: 5.5em minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: baseline;
+}
+
+.preview-row dt {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--md-on-surface-variant);
+}
+
+.preview-row dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--md-on-surface);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.preview-path {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.preview-missing {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--md-shape-sm);
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .preview-pane img,

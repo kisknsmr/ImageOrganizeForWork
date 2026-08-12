@@ -509,6 +509,74 @@ def file_thumbnail(file_id: int) -> Response:
     return Response(content=blob, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
 
+@app.get("/api/files/{file_id}/info")
+def file_info(file_id: int) -> dict:
+    """
+    プレビューペイン用のファイル詳細。
+
+    サイズは DB の値ではなくディスクの実値を返す（スキャン後に差し替えられた
+    ファイルでも実態と一致させるため）。画像の寸法は Pillow のヘッダ読み取りだけで
+    取得するので、画素のデコードは発生しない。
+    """
+    row = db.get_file_by_id(file_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    path = row["path"]
+    info = {
+        "id": file_id,
+        "path": path,
+        "filename": row["filename"],
+        "extension": row["extension"],
+        "content_type": row["content_type"],
+        "exists": False,
+        "size": row["size"],
+        "mtime": row["mtime"],
+        "width": None,
+        "height": None,
+    }
+
+    if not config.validate_path(path) or not os.path.exists(path):
+        return info
+
+    info["exists"] = True
+    try:
+        info["size"] = os.path.getsize(path)
+        info["mtime"] = os.path.getmtime(path)
+    except OSError:
+        pass
+
+    if row["content_type"] == "video":
+        width, height = _video_dimensions(path)
+    else:
+        width, height = _image_dimensions(path)
+    info["width"], info["height"] = width, height
+    return info
+
+
+def _image_dimensions(path: str) -> tuple[Optional[int], Optional[int]]:
+    try:
+        with Image.open(path) as img:
+            return img.width, img.height
+    except Exception:
+        # 画像として開けないものは寸法なしで返す（エラーにはしない）
+        return None, None
+
+
+def _video_dimensions(path: str) -> tuple[Optional[int], Optional[int]]:
+    cap = cv2.VideoCapture(path)
+    try:
+        if not cap.isOpened():
+            return None, None
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None
+        return width, height
+    except Exception:
+        return None, None
+    finally:
+        cap.release()
+
+
 @app.get("/api/files/{file_id}/preview")
 def file_preview(file_id: int, max_size: int = Query(1920, ge=320, le=4096)) -> Response:
     row = db.get_file_by_id(file_id)

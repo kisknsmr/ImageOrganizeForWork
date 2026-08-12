@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
+import { PreviewPane } from '../components/PreviewPane'
 import { QueryState } from '../components/QueryState'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
@@ -148,7 +149,10 @@ export function GalleryPage() {
             </div>
           )}
         </div>
-        {showFolderPanel ? (
+        {/* プレビューは常に出す。フォルダパネルは置き換えではなく列を足す
+            （置き換えると、ドラッグ元の画像を確認しながら移動できない） */}
+        <PreviewPane item={selected} />
+        {showFolderPanel && (
           <FolderDropPanel
             folders={folders.data?.folders ?? []}
             libraryRoot={folders.data?.root_path}
@@ -159,18 +163,6 @@ export function GalleryPage() {
             title="ドロップで移動"
             hint="サムネをここのフォルダへドラッグすると一括移動できます。"
           />
-        ) : (
-          <aside className="preview-pane">
-            {selected ? (
-              <>
-                <h3 className="section-title">{selected.filename}</h3>
-                <img src={api.previewUrl(selected.id)} alt={selected.filename} />
-                <p className="mono">{selected.path}</p>
-              </>
-            ) : (
-              <p className="muted">画像を選択してください（Ctrl/⌘+クリックで複数選択）</p>
-            )}
-          </aside>
         )}
       </div>
     </section>

@@ -9,12 +9,7 @@ import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useJobStatus } from '../components/useJobStatus'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
 import { useViewMode } from '../hooks/useViewMode'
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
+import { formatFileSize } from '../utils/format'
 
 export function DuplicatesPage() {
   const toast = useToast()
@@ -228,7 +223,7 @@ export function DuplicatesPage() {
                   >
                     <span className="group-item-title mono">{group.hash.slice(0, 16)}</span>
                     <span className="group-item-meta">
-                      {group.count} files · {formatSize(group.size)}
+                      {group.count} files · {formatFileSize(group.size)}
                     </span>
                   </button>
                 ))}

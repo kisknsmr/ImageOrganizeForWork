@@ -2,6 +2,7 @@ import type {
   AppSettings,
   BlurryResponse,
   DuplicatesResponse,
+  FileInfo,
   FileItem,
   FolderList,
   LibraryClearResult,
@@ -73,6 +74,8 @@ export const api = {
   preprocessCheck: (rootPath: string) =>
     request<PreprocessCheck>(`/api/preprocess/check?root_path=${encodeURIComponent(rootPath)}`),
   files: (params: URLSearchParams) => request<PagedFiles>(`/api/files?${params.toString()}`),
+  /** プレビューペイン用のファイル詳細（サイズ・寸法はディスクの実値） */
+  fileInfo: (id: number) => request<FileInfo>(`/api/files/${id}/info`),
   triage: (id: number, action: 'keep' | 'discard' | 'skip' | null) =>
     request(`/api/files/${id}/triage`, { method: 'POST', body: JSON.stringify({ action }) }),
   moveToTrash: (id: number) => request(`/api/files/${id}/trash`, { method: 'POST' }),
