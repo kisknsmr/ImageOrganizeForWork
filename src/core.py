@@ -28,6 +28,11 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 logger = logging.getLogger(__name__)
 
+
+# OpenCV が読めない形式(HEIC/AVIF/PSD 等)を Pillow で開き直す共通デコーダ。
+# API 側の解析(services/scan_analyze_service.py)と実装を共有する。
+from .image_formats import decode_grayscale
+
 # 軽量ユーティリティを再エクスポート（後方互換のため）
 from .utils import path_under_root, format_eta, hamming_dist, format_file_size, format_file_size_kb
 
@@ -126,6 +131,26 @@ def _generate_video_thumbnail(db_manager, file_id: int, file_path: str, size_wh:
         return create_error_pixmap(size_wh)
 
 
+def _pillow_thumbnail_bytes(file_path: str, size_wh: int) -> Optional[bytes]:
+    """Qt が読めない形式のサムネイルを Pillow で作る（JPEG バイト列）。"""
+    from . import image_formats
+    image_formats.ensure_openers_registered()
+
+    try:
+        import io as _io
+        with Image.open(file_path) as img:
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((size_wh, size_wh), Image.Resampling.LANCZOS)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            buf = _io.BytesIO()
+            img.save(buf, format="JPEG", quality=config.THUMBNAIL_QUALITY, optimize=True)
+            return buf.getvalue()
+    except Exception as exc:
+        logger.warning(f"Pillow thumbnail generation failed ({file_path}): {exc}")
+        return None
+
+
 def get_db_thumbnail(db_manager: 'DatabaseManager', file_id: int, file_path: str,
                      size_wh: int = None) -> QPixmap:
     """
@@ -200,6 +225,18 @@ def get_db_thumbnail(db_manager: 'DatabaseManager', file_id: int, file_path: str
                     logger.error(f"Failed to save thumbnail to DB (id={file_id}): {e}")
 
             return QPixmap.fromImage(img)
+
+        # Qt は HEIC/AVIF/PSD などを読めない。Pillow で作り直す
+        blob_data = _pillow_thumbnail_bytes(file_path, size_wh)
+        if blob_data:
+            if file_id and file_id > 0:
+                try:
+                    db_manager.save_thumbnail(file_id, blob_data)
+                except Exception as e:
+                    logger.error(f"Failed to save thumbnail to DB (id={file_id}): {e}")
+            pix = QPixmap()
+            if pix.loadFromData(blob_data):
+                return pix
 
         return create_error_pixmap(size_wh)
 
@@ -469,8 +506,7 @@ class AnalyzerThread(QThread):
             with open(p, "rb") as f:
                 img_data = f.read()
 
-            nparr = np.frombuffer(img_data, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            img = decode_grayscale(img_data, p)
 
             if img is None:
                 logger.warning(f"Failed to decode image for blur calculation: {p}")
@@ -508,8 +544,7 @@ class AnalyzerThread(QThread):
             with open(p, "rb") as f:
                 img_data = f.read()
 
-            nparr = np.frombuffer(img_data, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            img = decode_grayscale(img_data, p)
 
             if img is None:
                 logger.warning(f"Failed to decode image for phash calculation: {p}")

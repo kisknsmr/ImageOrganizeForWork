@@ -7,6 +7,10 @@ Pillow>=12.0
 PyQt6>=6.6
 scikit-learn>=1.5
 
+# HEIC/HEIF（iPhone の写真）を扱うための Pillow プラグイン。
+# 未導入でも起動はするが、その場合 .heic/.heif は対応形式から自動的に外れる。
+pillow-heif>=1.0
+
 # --- Tauri/React 版 API バックエンド（src/api_server.py）用 ---
 fastapi>=0.115
 uvicorn[standard]>=0.30

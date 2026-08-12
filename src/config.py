@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from typing import Set, Tuple, Optional
 import os
 
+from . import image_formats
+
 
 @dataclass
 class AppConfig:
@@ -28,15 +30,18 @@ class AppConfig:
     # 画像処理設定
     PHASH_SIZE: Tuple[int, int] = (9, 8)
 
-    # サポート画像拡張子
-    IMAGE_EXTENSIONS: Set[str] = frozenset({
-        '.jpg', '.jpeg', '.png', '.heic', '.webp'
-    })
+    # サポート画像拡張子。
+    # 固定値ではなく、この環境の Pillow が実際に開ける形式だけを起動時に解決する
+    # （宣言だけして開けない形式があると、取り込み後の解析で必ず失敗するため）。
+    # 詳細と候補一覧は src/image_formats.py を参照。
+    IMAGE_EXTENSIONS: Set[str] = field(
+        default_factory=image_formats.resolve_image_extensions
+    )
 
-    # サポート動画拡張子
-    VIDEO_EXTENSIONS: Set[str] = frozenset({
-        '.mp4', '.mov'
-    })
+    # サポート動画拡張子（OpenCV の FFMPEG バックエンドが読めるコンテナ）
+    VIDEO_EXTENSIONS: Set[str] = field(
+        default_factory=lambda: image_formats.VIDEO_EXTENSIONS
+    )
 
     # 全サポート拡張子
     @property

@@ -14,6 +14,27 @@ AI を併用できる画像整理・管理用デスクトップアプリ（PyQt6
 
 `src/theme.py` でトークン管理する **ダーク UI**（例: 背景 `#242424`、サイドバー `#1a1a1a`、アクセント青）です。リポジトリ同梱の可変フォント（`fonts/` の Inter / Noto Sans JP / Roboto）を読み込み、利用可能なら UI フォントに使います。
 
+## 対応フォーマット
+
+対応拡張子は**固定リストではなく、起動時にこの環境の Pillow が実際に開ける形式だけ**を
+採用します（宣言だけして開けない形式があると、取り込み後の解析で必ず失敗するため）。
+実際のリストはアプリの Settings 画面、または `GET /api/settings` で確認できます。
+
+| 区分 | 形式 |
+|------|------|
+| 画像（標準） | JPEG (`.jpg .jpeg .jpe .jfif`)、PNG (`.png .apng`)、WebP、TIFF、BMP/DIB、GIF、JPEG 2000 (`.jp2 .j2k .jpf .jpx`)、PSD、TGA、PCX、PPM 系、SGI、QOI |
+| 画像（要プラグイン） | HEIC/HEIF (`.heic .heif .hif`) — `pillow-heif` が必要。AVIF (`.avif .avifs`) — Pillow 12 以降で標準対応 |
+| 動画 | `.mp4 .mov .m4v .avi .mkv .wmv .webm .mpg .mpeg .mts .m2ts .3gp .flv`（OpenCV の FFMPEG バックエンド） |
+
+意図的に対象外にしているもの: ベクタ/文書（`.eps .ps .wmf .emf`）、科学データ
+（`.fits .grib .hdf`）、アイコン/テクスチャ（`.ico .icns .dds`）。写真整理の対象ではなく、
+ライブラリを汚すためです。
+
+> **RAW（`.cr2 .nef .arw .dng` など）は未対応です。** Pillow では復号できず、
+> `rawpy`（LibRaw）等のデコーダ追加が必要になります。
+
+候補の定義と判定は `src/image_formats.py` にまとまっています。
+
 ## 要件
 
 - **Python 3.10 以上**（`pyproject.toml` の `requires-python` に準拠）

@@ -17,6 +17,7 @@ from PIL import Image, ImageOps
 
 from src.config import config
 from src.database import DatabaseManager
+from src.image_formats import decode_grayscale
 from src.utils import format_eta, path_under_root
 
 logger = logging.getLogger(__name__)
@@ -209,8 +210,8 @@ def _calc_blur(path: str) -> float:
         if os.path.getsize(path) > config.MAX_IMAGE_SIZE_FOR_ANALYSIS:
             return 0.0
         with open(path, "rb") as fp:
-            buf = np.frombuffer(fp.read(), np.uint8)
-        img = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)
+            data = fp.read()
+        img = decode_grayscale(data, path)
         if img is None:
             return 0.0
         return float(cv2.Laplacian(img, cv2.CV_64F).var())
@@ -224,8 +225,8 @@ def _calc_phash(path: str) -> str:
         if os.path.getsize(path) > config.MAX_IMAGE_SIZE_FOR_ANALYSIS:
             return ""
         with open(path, "rb") as fp:
-            buf = np.frombuffer(fp.read(), np.uint8)
-        img = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)
+            data = fp.read()
+        img = decode_grayscale(data, path)
         if img is None:
             return ""
         img_small = cv2.resize(img, config.PHASH_SIZE, interpolation=cv2.INTER_AREA)
