@@ -3,12 +3,14 @@ import { useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
 import { PaneResizer } from '../components/PaneResizer'
+import { PageSizeSelect } from '../components/PageSizeSelect'
 import { PreviewPane } from '../components/PreviewPane'
 import { ResizableLayout } from '../components/ResizableLayout'
 import { QueryState } from '../components/QueryState'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { usePageSize } from '../hooks/usePageSize'
 import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
 import type { FileItem } from '../types'
@@ -17,6 +19,7 @@ export function GalleryPage() {
   const toast = useToast()
   const view = useViewMode('gallery')
   const pane = useResizablePane('gallery')
+  const { pageSize, setPageSize } = usePageSize('gallery', 80)
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<FileItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -24,11 +27,11 @@ export function GalleryPage() {
   const params = useMemo(() => {
     const p = new URLSearchParams()
     p.set('page', String(page))
-    p.set('limit', '80')
+    p.set('limit', String(pageSize))
     return p
-  }, [page])
-  const files = useQuery({ queryKey: ['files', page], queryFn: () => api.files(params) })
-  const totalPages = Math.max(1, Math.ceil((files.data?.total ?? 0) / 80))
+  }, [page, pageSize])
+  const files = useQuery({ queryKey: ['files', page, pageSize], queryFn: () => api.files(params) })
+  const totalPages = Math.max(1, Math.ceil((files.data?.total ?? 0) / pageSize))
   const folders = useQuery({
     queryKey: ['folders'],
     queryFn: api.folders,
@@ -92,6 +95,13 @@ export function GalleryPage() {
             sizeMax={view.sizeMax}
             onModeChange={view.setMode}
             onSizeChange={view.setSize}
+          />
+          <PageSizeSelect
+            value={pageSize}
+            onChange={(size) => {
+              setPageSize(size)
+              setPage(1)
+            }}
           />
           <button
             className={`button ${showFolderPanel ? '' : 'secondary'}`}

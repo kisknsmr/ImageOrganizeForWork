@@ -3,21 +3,22 @@ import { useState } from 'react'
 import { api } from '../api/client'
 import { PaneResizer } from '../components/PaneResizer'
 import { PreviewPane } from '../components/PreviewPane'
+import { PageSizeSelect } from '../components/PageSizeSelect'
 import { QueryState } from '../components/QueryState'
 import { ResizableLayout } from '../components/ResizableLayout'
 import { Spinner } from '../components/Spinner'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
+import { usePageSize } from '../hooks/usePageSize'
 import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
 import type { FileItem } from '../types'
-
-const PAGE_SIZE = 80
 
 export function TrashPage() {
   const toast = useToast()
   const view = useViewMode('trash')
   const pane = useResizablePane('trash')
+  const { pageSize, setPageSize } = usePageSize('trash', 60)
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [destinationFolder, setDestinationFolder] = useState('')
@@ -29,7 +30,7 @@ export function TrashPage() {
       api.files(
         new URLSearchParams({
           page: String(page),
-          limit: String(PAGE_SIZE),
+          limit: String(pageSize),
           include_trash: 'true',
           status: 'trash',
         }),
@@ -38,15 +39,15 @@ export function TrashPage() {
   })
 
   const total = trash.data?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const items = trash.data?.items ?? []
-  const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
-  const rangeEnd = (page - 1) * PAGE_SIZE + items.length
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const rangeEnd = (page - 1) * pageSize + items.length
 
   /** 削除・復元で件数が減って現在ページが範囲外になったら押し戻す */
   const refetchAndClampPage = async () => {
     const { data } = await trash.refetch()
-    const newTotalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE))
+    const newTotalPages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize))
     setPage((p) => Math.min(p, newTotalPages))
   }
   const folders = useQuery({ queryKey: ['folders'], queryFn: api.folders })
@@ -161,95 +162,106 @@ export function TrashPage() {
         <h2>Trash</h2>
         <p className="page-subtitle">ゴミ箱項目の復元、DB削除、完全削除をまとめて実行できます。</p>
       </header>
-      <div className="toolbar">
-        <div className="toolbar-group">
-          <span className="status-chip">
-            <span className="status-dot" />
-            {rangeStart}-{rangeEnd} / {total}
-          </span>
-          <span className="muted">Page {page} / {totalPages}</span>
-          <span className="muted">Selected: {selectedIds.length}</span>
+      {/* ツールバーと操作カードはスクロールしても常に見えるようにする */}
+      <div className="page-sticky">
+        <div className="toolbar">
+          <div className="toolbar-group">
+            <span className="status-chip">
+              <span className="status-dot" />
+              {rangeStart}-{rangeEnd} / {total}
+            </span>
+            <span className="muted">Page {page} / {totalPages}</span>
+            <span className="muted">Selected: {selectedIds.length}</span>
+          </div>
+          <div className="toolbar-group">
+            <ViewControls
+              mode={view.mode}
+              size={view.size}
+              sizeMin={view.sizeMin}
+              sizeMax={view.sizeMax}
+              onModeChange={view.setMode}
+              onSizeChange={view.setSize}
+            />
+            <PageSizeSelect
+              value={pageSize}
+              onChange={(size) => {
+                setPageSize(size)
+                setPage(1)
+              }}
+              disabled={busy}
+            />
+            <button
+              className="button secondary"
+              disabled={busy || page <= 1}
+              onClick={() => {
+                setPage((p) => Math.max(1, p - 1))
+                setSelectedIds([])
+              }}
+            >
+              Prev
+            </button>
+            <button
+              className="button secondary"
+              disabled={busy || page >= totalPages}
+              onClick={() => {
+                setPage((p) => Math.min(totalPages, p + 1))
+                setSelectedIds([])
+              }}
+            >
+              Next
+            </button>
+          </div>
         </div>
-        <div className="toolbar-group">
-          <ViewControls
-            mode={view.mode}
-            size={view.size}
-            sizeMin={view.sizeMin}
-            sizeMax={view.sizeMax}
-            onModeChange={view.setMode}
-            onSizeChange={view.setSize}
+        <article className="card">
+          <QueryState
+            isLoading={trash.isPending || folders.isPending}
+            isError={trash.isError || folders.isError}
+            error={trash.error ?? folders.error}
+            isEmpty={false}
+            loadingMessage="ゴミ箱データを読み込み中..."
           />
-          <button
-            className="button secondary"
-            disabled={busy || page <= 1}
-            onClick={() => {
-              setPage((p) => Math.max(1, p - 1))
-              setSelectedIds([])
-            }}
-          >
-            Prev
-          </button>
-          <button
-            className="button secondary"
-            disabled={busy || page >= totalPages}
-            onClick={() => {
-              setPage((p) => Math.min(totalPages, p + 1))
-              setSelectedIds([])
-            }}
-          >
-            Next
-          </button>
-        </div>
+          <p>ゴミ箱件数: {total} 件（このページに {items.length} 件を表示）</p>
+          <div className="row">
+            <select
+              className="input"
+              value={destinationFolder}
+              onChange={(e) => setDestinationFolder(e.target.value)}
+              disabled={busy}
+            >
+              <option value="">復元先フォルダを選択</option>
+              {(folders.data?.folders ?? []).map((folder) => (
+                <option key={folder} value={folder}>
+                  {folder}
+                </option>
+              ))}
+            </select>
+            <button
+              className="button"
+              disabled={busy || !selectedIds.length || !destinationFolder}
+              onClick={restoreSelected}
+            >
+              {restoreMutation.isPending ? <Spinner size={14} inline /> : null}
+              復元 ({selectedIds.length})
+            </button>
+            <button
+              className="button secondary"
+              disabled={busy || !selectedIds.length}
+              onClick={removeFromDbSelected}
+            >
+              {removeFromDbMutation.isPending ? <Spinner size={14} inline /> : null}
+              DBから削除
+            </button>
+            <button
+              className="button danger"
+              disabled={busy || !selectedIds.length}
+              onClick={permanentDeleteSelected}
+            >
+              {permanentDeleteMutation.isPending ? <Spinner size={14} inline /> : null}
+              完全削除
+            </button>
+          </div>
+        </article>
       </div>
-      <article className="card">
-        <QueryState
-          isLoading={trash.isPending || folders.isPending}
-          isError={trash.isError || folders.isError}
-          error={trash.error ?? folders.error}
-          isEmpty={false}
-          loadingMessage="ゴミ箱データを読み込み中..."
-        />
-        <p>ゴミ箱件数: {total} 件（このページに {items.length} 件を表示）</p>
-        <div className="row">
-          <select
-            className="input"
-            value={destinationFolder}
-            onChange={(e) => setDestinationFolder(e.target.value)}
-            disabled={busy}
-          >
-            <option value="">復元先フォルダを選択</option>
-            {(folders.data?.folders ?? []).map((folder) => (
-              <option key={folder} value={folder}>
-                {folder}
-              </option>
-            ))}
-          </select>
-          <button
-            className="button"
-            disabled={busy || !selectedIds.length || !destinationFolder}
-            onClick={restoreSelected}
-          >
-            {restoreMutation.isPending ? <Spinner size={14} inline /> : null}
-            復元 ({selectedIds.length})
-          </button>
-          <button
-            className="button secondary"
-            disabled={busy || !selectedIds.length}
-            onClick={removeFromDbSelected}
-          >
-            {removeFromDbMutation.isPending ? <Spinner size={14} inline /> : null}
-            DBから削除
-          </button>
-          <button
-            className="button danger"
-            disabled={busy || !selectedIds.length}
-            onClick={permanentDeleteSelected}
-          >
-            {permanentDeleteMutation.isPending ? <Spinner size={14} inline /> : null}
-            完全削除
-          </button>
-        </div>
-      </article>
       <ResizableLayout className="gallery-layout" pane={pane}>
         <div
           className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}

@@ -4,22 +4,23 @@ import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
 import { PaneResizer } from '../components/PaneResizer'
 import { PreviewPane } from '../components/PreviewPane'
+import { PageSizeSelect } from '../components/PageSizeSelect'
 import { QueryState } from '../components/QueryState'
 import { ResizableLayout } from '../components/ResizableLayout'
 import { Spinner } from '../components/Spinner'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { usePageSize } from '../hooks/usePageSize'
 import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
 import type { FileItem } from '../types'
-
-const PAGE_SIZE = 60
 
 export function ManualSortPage() {
   const toast = useToast()
   const view = useViewMode('manual-sort')
   const pane = useResizablePane('manual-sort')
+  const { pageSize, setPageSize } = usePageSize('manual-sort', 60)
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [destinationFolder, setDestinationFolder] = useState('')
@@ -27,13 +28,13 @@ export function ManualSortPage() {
 
   const files = useQuery({
     queryKey: ['manual-files', page],
-    queryFn: () => api.files(new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE) })),
+    queryFn: () => api.files(new URLSearchParams({ page: String(page), limit: String(pageSize) })),
     placeholderData: (prev) => prev,
   })
   const folders = useQuery({ queryKey: ['folders'], queryFn: api.folders })
 
   const total = files.data?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   /**
    * 移動・ゴミ箱送りの後に一覧を取り直す。
@@ -42,7 +43,7 @@ export function ManualSortPage() {
    */
   const refetchAndClampPage = async () => {
     const { data } = await files.refetch()
-    const newTotalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE))
+    const newTotalPages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize))
     setPage((p) => Math.min(p, newTotalPages))
   }
 
@@ -107,8 +108,8 @@ export function ManualSortPage() {
   const onDragStart = useDraggableFiles(selectedIds)
   const busy = moveMutation.isPending || trashMutation.isPending
   const items = files.data?.items ?? []
-  const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
-  const rangeEnd = (page - 1) * PAGE_SIZE + items.length
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const rangeEnd = (page - 1) * pageSize + items.length
 
   return (
     <section className="page">
@@ -116,89 +117,100 @@ export function ManualSortPage() {
         <h2>Manual Sort</h2>
         <p className="page-subtitle">選択した画像を任意フォルダへ移動、またはゴミ箱へまとめて送れます。サムネをドラッグでフォルダへ直接移動できます。</p>
       </header>
-      <div className="toolbar">
-        <div className="toolbar-group">
-          <span className="status-chip">
-            <span className="status-dot" />
-            {rangeStart}-{rangeEnd} / {total}
-          </span>
-          <span className="muted">Page {page} / {totalPages}</span>
-          <span className="muted">Selected: {selectedIds.length}</span>
+      {/* ツールバーと操作カードはスクロールしても常に見えるようにする */}
+      <div className="page-sticky">
+        <div className="toolbar">
+          <div className="toolbar-group">
+            <span className="status-chip">
+              <span className="status-dot" />
+              {rangeStart}-{rangeEnd} / {total}
+            </span>
+            <span className="muted">Page {page} / {totalPages}</span>
+            <span className="muted">Selected: {selectedIds.length}</span>
+          </div>
+          <div className="toolbar-group">
+            <ViewControls
+              mode={view.mode}
+              size={view.size}
+              sizeMin={view.sizeMin}
+              sizeMax={view.sizeMax}
+              onModeChange={view.setMode}
+              onSizeChange={view.setSize}
+            />
+            <PageSizeSelect
+              value={pageSize}
+              onChange={(size) => {
+                setPageSize(size)
+                setPage(1)
+              }}
+              disabled={busy}
+            />
+            <button
+              className="button secondary"
+              disabled={busy || page <= 1}
+              onClick={() => {
+                setPage((p) => Math.max(1, p - 1))
+                setSelectedIds([])
+              }}
+            >
+              Prev
+            </button>
+            <button
+              className="button secondary"
+              disabled={busy || page >= totalPages}
+              onClick={() => {
+                setPage((p) => Math.min(totalPages, p + 1))
+                setSelectedIds([])
+              }}
+            >
+              Next
+            </button>
+          </div>
         </div>
-        <div className="toolbar-group">
-          <ViewControls
-            mode={view.mode}
-            size={view.size}
-            sizeMin={view.sizeMin}
-            sizeMax={view.sizeMax}
-            onModeChange={view.setMode}
-            onSizeChange={view.setSize}
+        <article className="card">
+          <QueryState
+            isLoading={files.isPending || folders.isPending}
+            isError={files.isError || folders.isError}
+            error={files.error ?? folders.error}
+            isEmpty={false}
+            loadingMessage="ファイルとフォルダ情報を読み込み中..."
           />
-          <button
-            className="button secondary"
-            disabled={busy || page <= 1}
-            onClick={() => {
-              setPage((p) => Math.max(1, p - 1))
-              setSelectedIds([])
-            }}
-          >
-            Prev
-          </button>
-          <button
-            className="button secondary"
-            disabled={busy || page >= totalPages}
-            onClick={() => {
-              setPage((p) => Math.min(totalPages, p + 1))
-              setSelectedIds([])
-            }}
-          >
-            Next
-          </button>
-        </div>
+          <p>
+            対象ファイル: {total} 件（このページに {items.length} 件を表示）
+          </p>
+          <div className="row">
+            <select
+              className="input"
+              value={destinationFolder}
+              onChange={(e) => setDestinationFolder(e.target.value)}
+              disabled={busy}
+            >
+              <option value="">移動先フォルダを選択</option>
+              {(folders.data?.folders ?? []).map((folder) => (
+                <option key={folder} value={folder}>
+                  {folder}
+                </option>
+              ))}
+            </select>
+            <button
+              className="button"
+              disabled={busy || !selectedIds.length || !destinationFolder}
+              onClick={moveSelected}
+            >
+              {moveMutation.isPending ? <Spinner size={14} inline /> : null}
+              選択を移動 ({selectedIds.length})
+            </button>
+            <button
+              className="button danger"
+              disabled={busy || !selectedIds.length}
+              onClick={trashSelected}
+            >
+              {trashMutation.isPending ? <Spinner size={14} inline /> : null}
+              選択をゴミ箱へ
+            </button>
+          </div>
+        </article>
       </div>
-      <article className="card">
-        <QueryState
-          isLoading={files.isPending || folders.isPending}
-          isError={files.isError || folders.isError}
-          error={files.error ?? folders.error}
-          isEmpty={false}
-          loadingMessage="ファイルとフォルダ情報を読み込み中..."
-        />
-        <p>
-          対象ファイル: {total} 件（このページに {items.length} 件を表示）
-        </p>
-        <div className="row">
-          <select
-            className="input"
-            value={destinationFolder}
-            onChange={(e) => setDestinationFolder(e.target.value)}
-            disabled={busy}
-          >
-            <option value="">移動先フォルダを選択</option>
-            {(folders.data?.folders ?? []).map((folder) => (
-              <option key={folder} value={folder}>
-                {folder}
-              </option>
-            ))}
-          </select>
-          <button
-            className="button"
-            disabled={busy || !selectedIds.length || !destinationFolder}
-            onClick={moveSelected}
-          >
-            {moveMutation.isPending ? <Spinner size={14} inline /> : null}
-            選択を移動 ({selectedIds.length})
-          </button>
-          <button
-            className="button danger"
-            disabled={busy || !selectedIds.length}
-            onClick={trashSelected}
-          >
-            {trashMutation.isPending ? <Spinner size={14} inline /> : null}
-            選択をゴミ箱へ
-          </button>
-        </div>
-      </article>
       <ResizableLayout className="gallery-layout with-folder" pane={pane}>
         <div
           className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}

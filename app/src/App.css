@@ -265,9 +265,37 @@
 }
 
 /*
- * ツールバーは常時操作対象なのでスクロール追従させる。
- * （従来は本文と一緒に流れて画面外へ消えていた）
+ * ツールバーと操作カードは常時使うのでスクロールに追従させる。
+ *
+ * 2 つを 1 つの sticky コンテナにまとめる。別々に sticky にすると、
+ * 間の余白から本文が透けて見えるうえ、上段の高さを見積もる必要が出る。
  */
+.page-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 calc(var(--page-pad) * -1);
+  padding: 0 var(--page-pad) var(--sp-2);
+  background: var(--md-surface);
+}
+
+/* まとめた場合は内側のツールバーが自前で吸着する必要はない */
+.page-sticky > .toolbar {
+  position: static;
+  margin: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border-bottom: 0;
+  border-radius: var(--md-shape-md);
+}
+
+.page-sticky > .card {
+  background: var(--md-surface-container);
+}
+
 .toolbar {
   position: sticky;
   top: 0;
@@ -1103,6 +1131,37 @@
 
 .view-mode-button + .view-mode-button {
   border-left: 1px solid var(--md-outline);
+}
+
+/* 1 ページの表示枚数 */
+.page-size-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 40px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--md-outline);
+  border-radius: var(--md-shape-full);
+}
+
+.page-size-label {
+  font-size: 12px;
+  color: var(--md-on-surface-variant);
+  white-space: nowrap;
+}
+
+.page-size-select select.input {
+  width: auto;
+  min-height: auto;
+  height: 28px;
+  padding: 0 var(--sp-6) 0 var(--sp-1);
+  border: 0;
+  background-position: right 6px center;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-size-select select.input:focus {
+  outline: none;
 }
 
 .size-control {

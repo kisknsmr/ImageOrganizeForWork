@@ -66,68 +66,71 @@ export function TinyFilesPage() {
         <h2>Tiny Files</h2>
         <p className="page-subtitle">指定サイズ未満の低容量ファイルを抽出し、まとめてゴミ箱へ移動できます。</p>
       </header>
-      <div className="toolbar">
-        <div className="toolbar-group">
-          <span className="status-chip">
-            <span className="status-dot" />
-            Candidates: {items.length}
-            {tiny.data?.truncated ? ` / ${tiny.data.available}` : ''}
-          </span>
-          <span className="muted">Selected: {selectedIds.length}</span>
-        </div>
-        <div className="toolbar-group">
-          <ViewControls
-            mode={view.mode}
-            size={view.size}
-            sizeMin={view.sizeMin}
-            sizeMax={view.sizeMax}
-            onModeChange={view.setMode}
-            onSizeChange={view.setSize}
-          />
-        </div>
-      </div>
-      <article className="card">
-        <div className="row">
-          <label className="muted">
-            最小しきい値:
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={100000}
-              value={maxSizeKb}
-              onChange={(e) => setMaxSizeKb(Math.max(1, Number(e.target.value) || 1))}
-              disabled={busy}
-              style={{ width: 100, marginLeft: 8 }}
+      {/* ツールバーと操作カードはスクロールしても常に見えるようにする */}
+      <div className="page-sticky">
+        <div className="toolbar">
+          <div className="toolbar-group">
+            <span className="status-chip">
+              <span className="status-dot" />
+              Candidates: {items.length}
+              {tiny.data?.truncated ? ` / ${tiny.data.available}` : ''}
+            </span>
+            <span className="muted">Selected: {selectedIds.length}</span>
+          </div>
+          <div className="toolbar-group">
+            <ViewControls
+              mode={view.mode}
+              size={view.size}
+              sizeMin={view.sizeMin}
+              sizeMax={view.sizeMax}
+              onModeChange={view.setMode}
+              onSizeChange={view.setSize}
             />
-            <span style={{ marginLeft: 4 }}>KB 未満</span>
-          </label>
-          <button className="button secondary" disabled={busy || !items.length} onClick={selectAll}>
-            すべて選択
-          </button>
-          <button className="button secondary" disabled={busy || !selectedIds.length} onClick={clearSelection}>
-            選択解除
-          </button>
-          <button className="button danger" disabled={busy || !selectedIds.length} onClick={trashSelected}>
-            {trashMutation.isPending ? <Spinner size={14} inline /> : null}
-            ゴミ箱へ ({selectedIds.length})
-          </button>
+          </div>
         </div>
-        <QueryState
-          isLoading={tiny.isPending}
-          isError={tiny.isError}
-          error={tiny.error}
-          isEmpty={!tiny.isPending && !tiny.isError && items.length === 0}
-          loadingMessage="低容量ファイルを検索中..."
-          emptyMessage="該当するファイルは見つかりませんでした。"
-        />
-        <TruncationNotice
-          info={tiny.data}
-          shown={items.length}
-          subject="低容量ファイル"
-          hint="しきい値を下げて絞り込んでください。"
-        />
-      </article>
+        <article className="card">
+          <div className="row">
+            <label className="muted">
+              最小しきい値:
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={100000}
+                value={maxSizeKb}
+                onChange={(e) => setMaxSizeKb(Math.max(1, Number(e.target.value) || 1))}
+                disabled={busy}
+                style={{ width: 100, marginLeft: 8 }}
+              />
+              <span style={{ marginLeft: 4 }}>KB 未満</span>
+            </label>
+            <button className="button secondary" disabled={busy || !items.length} onClick={selectAll}>
+              すべて選択
+            </button>
+            <button className="button secondary" disabled={busy || !selectedIds.length} onClick={clearSelection}>
+              選択解除
+            </button>
+            <button className="button danger" disabled={busy || !selectedIds.length} onClick={trashSelected}>
+              {trashMutation.isPending ? <Spinner size={14} inline /> : null}
+              ゴミ箱へ ({selectedIds.length})
+            </button>
+          </div>
+          <QueryState
+            isLoading={tiny.isPending}
+            isError={tiny.isError}
+            error={tiny.error}
+            isEmpty={!tiny.isPending && !tiny.isError && items.length === 0}
+            loadingMessage="低容量ファイルを検索中..."
+            emptyMessage="該当するファイルは見つかりませんでした。"
+          />
+          <TruncationNotice
+            info={tiny.data}
+            shown={items.length}
+            subject="低容量ファイル"
+            hint="しきい値を下げて絞り込んでください。"
+          />
+        </article>
+      </div>
       <ResizableLayout className="gallery-layout" pane={pane}>
         <div
           className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}

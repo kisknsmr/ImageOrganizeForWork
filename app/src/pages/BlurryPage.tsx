@@ -4,6 +4,7 @@ import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
 import { PaneResizer } from '../components/PaneResizer'
 import { PreviewPane } from '../components/PreviewPane'
+import { PageSizeSelect } from '../components/PageSizeSelect'
 import { QueryState } from '../components/QueryState'
 import { ResizableLayout } from '../components/ResizableLayout'
 import { Spinner } from '../components/Spinner'
@@ -11,16 +12,16 @@ import { TruncationNotice } from '../components/TruncationNotice'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { usePageSize } from '../hooks/usePageSize'
 import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
 import type { FileItem } from '../types'
-
-const PAGE_SIZE = 60
 
 export function BlurryPage() {
   const toast = useToast()
   const view = useViewMode('blurry')
   const pane = useResizablePane('blurry')
+  const { pageSize, setPageSize } = usePageSize('blurry', 60)
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   // null = 未編集。既定値はサーバー設定に追従させる
   const [thresholdInput, setThresholdInput] = useState<number | null>(null)
@@ -44,11 +45,11 @@ export function BlurryPage() {
   // /api/blurry はしきい値以下を一括で返すため、表示はクライアント側でページングする
   const all = blurry.data?.items ?? []
   const total = all.length
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const currentPage = Math.min(page, totalPages)
-  const items = all.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
-  const rangeStart = total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1
-  const rangeEnd = (currentPage - 1) * PAGE_SIZE + items.length
+  const items = all.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const rangeStart = total === 0 ? 0 : (currentPage - 1) * pageSize + 1
+  const rangeEnd = (currentPage - 1) * pageSize + items.length
 
   const toggle = (id: number) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -111,93 +112,104 @@ export function BlurryPage() {
         <h2>Blurry Photos</h2>
         <p className="page-subtitle">ぼけスコアが低い画像候補を確認し、まとめてゴミ箱や任意のフォルダへ移動できます。</p>
       </header>
-      <div className="toolbar">
-        <div className="toolbar-group">
-          <span className="status-chip">
-            <span className="status-dot" />
-            {rangeStart}-{rangeEnd} / {total}
-          </span>
-          <span className="muted">Page {currentPage} / {totalPages}</span>
-          <span className="muted">Selected: {selectedIds.length}</span>
-        </div>
-        <div className="toolbar-group">
-          <ViewControls
-            mode={view.mode}
-            size={view.size}
-            sizeMin={view.sizeMin}
-            sizeMax={view.sizeMax}
-            onModeChange={view.setMode}
-            onSizeChange={view.setSize}
-          />
-          <button
-            className="button secondary"
-            disabled={busy || currentPage <= 1}
-            onClick={() => {
-              setPage(Math.max(1, currentPage - 1))
-              setSelectedIds([])
-            }}
-          >
-            Prev
-          </button>
-          <button
-            className="button secondary"
-            disabled={busy || currentPage >= totalPages}
-            onClick={() => {
-              setPage(Math.min(totalPages, currentPage + 1))
-              setSelectedIds([])
-            }}
-          >
-            Next
-          </button>
-        </div>
-      </div>
-      <article className="card">
-        <div className="row">
-          <label className="muted">
-            ぼけしきい値:
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={1000}
-              value={threshold}
-              onChange={(e) => {
-                setThresholdInput(Math.min(1000, Math.max(1, Number(e.target.value) || 1)))
+      {/* ツールバーと操作カードはスクロールしても常に見えるようにする */}
+      <div className="page-sticky">
+        <div className="toolbar">
+          <div className="toolbar-group">
+            <span className="status-chip">
+              <span className="status-dot" />
+              {rangeStart}-{rangeEnd} / {total}
+            </span>
+            <span className="muted">Page {currentPage} / {totalPages}</span>
+            <span className="muted">Selected: {selectedIds.length}</span>
+          </div>
+          <div className="toolbar-group">
+            <ViewControls
+              mode={view.mode}
+              size={view.size}
+              sizeMin={view.sizeMin}
+              sizeMax={view.sizeMax}
+              onModeChange={view.setMode}
+              onSizeChange={view.setSize}
+            />
+            <PageSizeSelect
+              value={pageSize}
+              onChange={(size) => {
+                setPageSize(size)
                 setPage(1)
-                setSelectedIds([])
               }}
               disabled={busy}
-              style={{ width: 88, marginLeft: 8 }}
             />
-          </label>
-          <button className="button secondary" type="button" disabled={busy || !items.length} onClick={selectPage}>
-            このページを全選択
-          </button>
-          <button className="button secondary" type="button" disabled={busy || !selectedIds.length} onClick={clearSelection}>
-            選択解除
-          </button>
-          <button
-            className={`button ${showFolderPanel ? '' : 'secondary'}`}
-            type="button"
-            onClick={() => setShowFolderPanel((v) => !v)}
-          >
-            {showFolderPanel ? 'パネルを隠す' : 'フォルダパネル'}
-          </button>
-          <button className="button danger" disabled={busy || !selectedIds.length} onClick={trashSelected}>
-            {trashMutation.isPending ? <Spinner size={14} inline /> : null}
-            選択をゴミ箱へ ({selectedIds.length})
-          </button>
+            <button
+              className="button secondary"
+              disabled={busy || currentPage <= 1}
+              onClick={() => {
+                setPage(Math.max(1, currentPage - 1))
+                setSelectedIds([])
+              }}
+            >
+              Prev
+            </button>
+            <button
+              className="button secondary"
+              disabled={busy || currentPage >= totalPages}
+              onClick={() => {
+                setPage(Math.min(totalPages, currentPage + 1))
+                setSelectedIds([])
+              }}
+            >
+              Next
+            </button>
+          </div>
         </div>
-        <p className="muted">
-          しきい値未満のぼけ候補: {total} 件（このページに {items.length} 件を表示）
-        </p>
-        <TruncationNotice
-          info={blurry.data}
-          shown={total}
-          subject="ぼけ候補"
-          hint="しきい値を下げて絞り込んでください。"
-        />
-      </article>
+        <article className="card">
+          <div className="row">
+            <label className="muted">
+              ぼけしきい値:
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={1000}
+                value={threshold}
+                onChange={(e) => {
+                  setThresholdInput(Math.min(1000, Math.max(1, Number(e.target.value) || 1)))
+                  setPage(1)
+                  setSelectedIds([])
+                }}
+                disabled={busy}
+                style={{ width: 88, marginLeft: 8 }}
+              />
+            </label>
+            <button className="button secondary" type="button" disabled={busy || !items.length} onClick={selectPage}>
+              このページを全選択
+            </button>
+            <button className="button secondary" type="button" disabled={busy || !selectedIds.length} onClick={clearSelection}>
+              選択解除
+            </button>
+            <button
+              className={`button ${showFolderPanel ? '' : 'secondary'}`}
+              type="button"
+              onClick={() => setShowFolderPanel((v) => !v)}
+            >
+              {showFolderPanel ? 'パネルを隠す' : 'フォルダパネル'}
+            </button>
+            <button className="button danger" disabled={busy || !selectedIds.length} onClick={trashSelected}>
+              {trashMutation.isPending ? <Spinner size={14} inline /> : null}
+              選択をゴミ箱へ ({selectedIds.length})
+            </button>
+          </div>
+          <p className="muted">
+            しきい値未満のぼけ候補: {total} 件（このページに {items.length} 件を表示）
+          </p>
+          <TruncationNotice
+            info={blurry.data}
+            shown={total}
+            subject="ぼけ候補"
+            hint="しきい値を下げて絞り込んでください。"
+          />
+        </article>
+      </div>
       <QueryState
         isLoading={blurry.isPending}
         isError={blurry.isError}
