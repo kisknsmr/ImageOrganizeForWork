@@ -350,6 +350,57 @@ class DatabaseManager:
                 logger.error(f"Failed to reset analysis under root {root_path}: {e}")
                 raise
 
+    def clear_scan_records(self, root_path: Optional[str] = None) -> dict:
+        """
+        スキャンで取り込んだファイル記録（とサムネイル）を削除する。
+
+        **ディスク上のファイルには一切触れない。** 消えるのは DB 上の記録だけで、
+        次に Scan すれば同じものが再度取り込まれる。
+
+        ゴミ箱(status='trash')の行は対象外にする。これらは既にゴミ箱フォルダへ
+        物理移動済みで、記録を消すと元の場所へ戻せなくなるため。
+        （ゴミ箱を空にするのは Trash 画面の役割）
+
+        Args:
+            root_path: 対象ライブラリ。None ならすべての読み込み記録が対象。
+
+        Returns:
+            {"deleted": 削除した件数, "kept_trash": 残したゴミ箱の件数}
+        """
+        with self.lock:
+            try:
+                rows = self.conn.execute("SELECT id, path, status FROM files").fetchall()
+
+                target_ids = []
+                kept_trash = 0
+                for fid, path, status in rows:
+                    if status == "trash":
+                        kept_trash += 1
+                        continue
+                    if root_path and not path_under_root(path, root_path):
+                        continue
+                    target_ids.append(fid)
+
+                # SQLite の変数上限を避けるため分割して削除する
+                for start in range(0, len(target_ids), config.BATCH_SIZE_DELETE):
+                    chunk = target_ids[start:start + config.BATCH_SIZE_DELETE]
+                    placeholders = ",".join("?" for _ in chunk)
+                    self.conn.execute(
+                        f"DELETE FROM thumbnails WHERE file_id IN ({placeholders})", chunk)
+                    self.conn.execute(
+                        f"DELETE FROM files WHERE id IN ({placeholders})", chunk)
+
+                self.conn.commit()
+                logger.info(
+                    "Cleared %d scan records (root=%s, kept %d trash rows)",
+                    len(target_ids), root_path or "ALL", kept_trash,
+                )
+                return {"deleted": len(target_ids), "kept_trash": kept_trash}
+            except sqlite3.Error as e:
+                self.conn.rollback()
+                logger.error(f"Failed to clear scan records (root={root_path}): {e}")
+                raise
+
     @staticmethod
     def _content_type_for_extension(extension: str) -> str:
         ext = (extension or "").lower()

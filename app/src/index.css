@@ -91,6 +91,8 @@
   --nav-drawer-width: 264px;
   --nav-rail-width: 80px;
   --app-bar-height: 64px;
+  /* 吸着するページ内ツールバーの高さ。sticky なサイドペインはこの下に着く */
+  --toolbar-height: 64px;
 
   /* --- 後方互換エイリアス（既存ページが参照しているため残す）----------- */
   --bg-app: var(--md-surface);

@@ -170,3 +170,26 @@ export type FolderList = {
   /** 絶対パス → そのフォルダ直下のファイル数 */
   counts?: Record<string, number>
 }
+
+/** 読み込み記録の消去範囲。current = 現在のライブラリのみ / all = 全記録 */
+export type LibraryClearScope = 'current' | 'all'
+
+/** POST /api/library/clear の結果 */
+export type LibraryClearResult = {
+  /** 消したファイル記録の件数 */
+  deleted: number
+  /** 復元できなくなるため残したゴミ箱の件数 */
+  kept_trash: number
+  root_path: string | null
+  scope: LibraryClearScope
+}
+
+/** GET /api/preprocess/check — 振り分け対象の事前カウント（実行結果の total と一致する） */
+export type PreprocessCheck = {
+  root_path: string
+  valid: boolean
+  total: number
+  pictures: number
+  movies: number
+  others: number
+}

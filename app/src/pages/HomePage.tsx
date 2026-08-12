@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../api/client'
 import { ImportPanel } from '../components/ImportPanel'
 import { QueryState } from '../components/QueryState'
+import { Spinner } from '../components/Spinner'
+import { useClearLibrary } from '../components/useClearLibrary'
 
 type StatTileProps = {
   label: string
@@ -25,6 +27,8 @@ export function HomePage() {
   const health = useQuery({ queryKey: ['health'], queryFn: api.health, refetchInterval: 3000 })
   const hasError = stats.isError || health.isError
   const ready = !stats.isPending && !health.isPending && !hasError
+  const clearLibrary = useClearLibrary()
+  const total = stats.data?.total ?? 0
 
   return (
     <section className="page">
@@ -67,6 +71,22 @@ export function HomePage() {
               スキャン／解析の対象フォルダです。変更するには上の Selected Folder
               で別のフォルダを指定して Scan を実行してください。
             </p>
+            {total > 0 && (
+              <div className="row">
+                <button
+                  className="button ghost"
+                  type="button"
+                  disabled={clearLibrary.isPending}
+                  onClick={() =>
+                    clearLibrary.clear('current', { total, rootPath: stats.data?.root_path })
+                  }
+                  title="このライブラリの読み込み記録を消します（ディスク上のファイルは消えません）"
+                >
+                  {clearLibrary.isPending ? <Spinner size={14} inline /> : null}
+                  読み込み記録をクリア（{total.toLocaleString()} 件）
+                </button>
+              </div>
+            )}
           </article>
         </>
       )}

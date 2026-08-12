@@ -4,11 +4,14 @@ import type {
   DuplicatesResponse,
   FileItem,
   FolderList,
+  LibraryClearResult,
+  LibraryClearScope,
   LibraryStats,
   OrganizeApplyResult,
   OrganizeCapabilities,
   OrganizePreview,
   PagedFiles,
+  PreprocessCheck,
   ScanCheck,
   ScanJob,
   SimilarResponse,
@@ -56,8 +59,17 @@ export const api = {
   analyzeStart: () => request<{ started: boolean; message?: string; job: ScanJob }>('/api/analyze/start', { method: 'POST' }),
   analyzeReset: (rootPath: string) =>
     request<{ reset: number }>('/api/analyze/reset', { method: 'POST', body: JSON.stringify({ root_path: rootPath }) }),
+  /** 前回の読み込み記録を消す。ディスク上のファイルは削除しない */
+  libraryClear: (scope: LibraryClearScope) =>
+    request<LibraryClearResult>('/api/library/clear', {
+      method: 'POST',
+      body: JSON.stringify({ scope }),
+    }),
   preprocessStart: (rootPath: string) =>
     request<ScanJob>('/api/preprocess/start', { method: 'POST', body: JSON.stringify({ root_path: rootPath }) }),
+  /** 振り分け対象の事前カウント。scanCheck とは対象範囲が異なる */
+  preprocessCheck: (rootPath: string) =>
+    request<PreprocessCheck>(`/api/preprocess/check?root_path=${encodeURIComponent(rootPath)}`),
   files: (params: URLSearchParams) => request<PagedFiles>(`/api/files?${params.toString()}`),
   triage: (id: number, action: 'keep' | 'discard' | 'skip' | null) =>
     request(`/api/files/${id}/triage`, { method: 'POST', body: JSON.stringify({ action }) }),

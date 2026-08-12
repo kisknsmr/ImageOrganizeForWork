@@ -137,20 +137,19 @@ export function TrashIcon(props: IconProps) {
   )
 }
 
+/**
+ * 設定（歯車）。
+ * 以前は中心円＋放射状の線で描いていたため、小さいサイズでは光条＝明暗切替
+ * アイコンに見えていた。歯を持つ閉じた輪郭にして歯車と分かるようにする。
+ */
 export function SettingsIcon(props: IconProps) {
   return (
     <Svg {...props}>
-      <circle cx="8" cy="8" r="3.2" {...STROKE} />
-      {Array.from({ length: 8 }).map((_, i) => {
-        const angle = (i * 45 * Math.PI) / 180
-        const r1 = 6.08
-        const r2 = 7.68
-        const x1 = 8 + r1 * Math.cos(angle)
-        const y1 = 8 + r1 * Math.sin(angle)
-        const x2 = 8 + r2 * Math.cos(angle)
-        const y2 = 8 + r2 * Math.sin(angle)
-        return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} {...STROKE} />
-      })}
+      <path
+        d="M6.58 3.21 L6.89 1.39 L9.11 1.39 L9.42 3.21 L10.39 3.61 L11.89 2.55 L13.45 4.11 L12.39 5.61 L12.79 6.58 L14.61 6.89 L14.61 9.11 L12.79 9.42 L12.39 10.39 L13.45 11.89 L11.89 13.45 L10.39 12.39 L9.42 12.79 L9.11 14.61 L6.89 14.61 L6.58 12.79 L5.61 12.39 L4.11 13.45 L2.55 11.89 L3.61 10.39 L3.21 9.42 L1.39 9.11 L1.39 6.89 L3.21 6.58 L3.61 5.61 L2.55 4.11 L4.11 2.55 L5.61 3.61 Z"
+        {...STROKE}
+      />
+      <circle cx="8" cy="8" r="2.4" {...STROKE} />
     </Svg>
   )
 }

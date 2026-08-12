@@ -221,13 +221,16 @@
 }
 
 .page {
+  --page-pad: var(--sp-6);
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
   width: 100%;
   max-width: 1440px;
   margin: 0 auto;
-  padding: var(--sp-6) var(--sp-6) var(--sp-8);
+  /* 上パディングはヘッダー側に持たせる。ここに余白があると、吸着した
+     ツールバーとの隙間から本文が覗いてしまう */
+  padding: 0 var(--page-pad) var(--sp-8);
 }
 
 /* M3 large top app bar 相当。本文と一緒にスクロールして退避する */
@@ -235,6 +238,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
+  padding-top: var(--page-pad);
 }
 
 .page-header h2 {
@@ -273,21 +277,12 @@
   justify-content: space-between;
   gap: var(--sp-3);
   flex-wrap: wrap;
-  padding: var(--sp-3) var(--sp-4);
-  border-radius: var(--md-shape-md);
+  /* ページ左右パディング分だけ広げて全幅にする。隙間があるとそこから
+     本文が覗くため、上に覆いを重ねる（＝直前の行を隠す）ことはしない */
+  margin: 0 calc(var(--page-pad) * -1);
+  padding: var(--sp-3) var(--page-pad);
   background: var(--md-surface-container);
-  box-shadow: var(--md-elevation-2);
-}
-
-/* 吸着時に、本文が上の余白から透けて見えないよう地色で覆う */
-.toolbar::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 100%;
-  height: var(--sp-6);
-  background: var(--md-surface);
+  border-bottom: 1px solid var(--md-outline-variant);
 }
 
 .toolbar > progress {
@@ -413,6 +408,17 @@
   color: var(--md-on-tertiary-container);
 }
 
+/* 取り返しのつきにくい操作をまとめる領域 */
+.danger-zone {
+  background: var(--md-surface-container-low);
+  outline: 1px solid var(--md-error);
+  outline-offset: -1px;
+}
+
+.danger-zone > h3 {
+  color: var(--md-error);
+}
+
 .result-card .muted {
   color: inherit;
   opacity: 0.86;
@@ -439,11 +445,11 @@
 .preview-pane,
 .folder-drop-panel {
   position: sticky;
-  top: 72px;
+  top: calc(var(--toolbar-height) + var(--sp-2));
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  max-height: calc(100dvh - 96px);
+  max-height: calc(100dvh - var(--toolbar-height) - var(--sp-8));
   min-height: 0;
   padding: var(--sp-4);
   border-radius: var(--md-shape-lg);
@@ -483,12 +489,12 @@
 
 .pane {
   position: sticky;
-  top: 72px;
+  top: calc(var(--toolbar-height) + var(--sp-2));
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
   min-height: 0;
-  max-height: calc(100dvh - 96px);
+  max-height: calc(100dvh - var(--toolbar-height) - var(--sp-8));
   padding: var(--sp-4);
   border-radius: var(--md-shape-lg);
   background: var(--md-surface-container-low);
@@ -586,8 +592,8 @@
 
 /* ワークスペース内のフォルダパネルは列の高さに合わせる */
 .workspace .folder-drop-panel {
-  top: 72px;
-  max-height: calc(100dvh - 96px);
+  top: calc(var(--toolbar-height) + var(--sp-2));
+  max-height: calc(100dvh - var(--toolbar-height) - var(--sp-8));
 }
 
 /* --- folder panel（ドロップ先リスト）--------------------------------- */
@@ -1700,7 +1706,8 @@ progress:not([value]) {
 
 @media (max-width: 720px) {
   .page {
-    padding: var(--sp-4) var(--sp-4) var(--sp-6);
+    --page-pad: var(--sp-4);
+    padding: 0 var(--page-pad) var(--sp-6);
   }
 
   .toolbar {

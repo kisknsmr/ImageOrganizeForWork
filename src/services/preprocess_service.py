@@ -37,6 +37,54 @@ def _category_for(filename: str) -> str:
     return OTHERS_DIR
 
 
+def collect_targets(root: str) -> list[tuple[str, str]]:
+    """
+    振り分け対象を集める。返すのは (絶対パス, root からの相対ディレクトリ)。
+
+    対象の定義はここ 1 箇所に集約する。実行と事前カウントで基準がずれると、
+    「見つかった件数」と「振り分け総数」が食い違って見える。
+
+    対象外:
+      - 既にカテゴリフォルダ(01 Pictures/02 Movies/03 Others)の中にあるもの
+        （再実行しても二重に振り分けられないようにするため）
+      - ゴミ箱フォルダの中
+    なお拡張子による絞り込みは**しない**。未対応の拡張子は 03 Others 行きになる。
+    """
+    targets: list[tuple[str, str]] = []
+    for current_root, dirs, files in os.walk(root):
+        rel_from_root = os.path.relpath(current_root, root)
+        top = rel_from_root.split(os.sep, 1)[0] if rel_from_root != "." else ""
+        if top in CATEGORY_DIRS or config.TRASH_FOLDER_NAME in current_root:
+            dirs[:] = []
+            continue
+        for filename in files:
+            full_path = os.path.join(current_root, filename)
+            if not config.validate_path(full_path):
+                continue
+            targets.append((full_path, "" if rel_from_root == "." else rel_from_root))
+    return targets
+
+
+def count_targets(root_path: str) -> dict:
+    """
+    実行前に、振り分け対象の件数と内訳を返す（移動は行わない）。
+
+    run_preprocess と同じ collect_targets を使うので、ここで出た total は
+    実行後の「対象N件中」と必ず一致する。
+    """
+    root = os.path.normpath(root_path)
+    counts = {PICTURES_DIR: 0, MOVIES_DIR: 0, OTHERS_DIR: 0}
+    targets = collect_targets(root)
+    for full_path, _rel_dir in targets:
+        counts[_category_for(os.path.basename(full_path))] += 1
+    return {
+        "total": len(targets),
+        "pictures": counts[PICTURES_DIR],
+        "movies": counts[MOVIES_DIR],
+        "others": counts[OTHERS_DIR],
+    }
+
+
 def run_preprocess(
     root_path: str,
     status_cb: Optional[StatusCallback] = None,
@@ -55,18 +103,7 @@ def run_preprocess(
     stopper = should_stop or (lambda: False)
 
     emit_status("対象ファイルを検索中...")
-    targets: list[tuple[str, str]] = []  # (絶対パス, root からの相対ディレクトリ)
-    for current_root, dirs, files in os.walk(root):
-        rel_from_root = os.path.relpath(current_root, root)
-        top = rel_from_root.split(os.sep, 1)[0] if rel_from_root != "." else ""
-        if top in CATEGORY_DIRS or config.TRASH_FOLDER_NAME in current_root:
-            dirs[:] = []
-            continue
-        for filename in files:
-            full_path = os.path.join(current_root, filename)
-            if not config.validate_path(full_path):
-                continue
-            targets.append((full_path, "" if rel_from_root == "." else rel_from_root))
+    targets = collect_targets(root)
 
     total = len(targets)
     counts = {PICTURES_DIR: 0, MOVIES_DIR: 0, OTHERS_DIR: 0}

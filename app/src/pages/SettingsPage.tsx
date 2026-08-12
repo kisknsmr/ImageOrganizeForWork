@@ -3,10 +3,12 @@ import { useState } from 'react'
 import { api } from '../api/client'
 import { QueryState } from '../components/QueryState'
 import { Spinner } from '../components/Spinner'
+import { useClearLibrary } from '../components/useClearLibrary'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 
 export function SettingsPage() {
   const toast = useToast()
+  const clearLibrary = useClearLibrary()
   // null = 未編集（サーバー値を表示）。編集した時だけ state に持つ
   const [trashFolderInput, setTrashFolderInput] = useState<string | null>(null)
 
@@ -113,6 +115,40 @@ export function SettingsPage() {
             <h3>Supported Extensions</h3>
             <p className="muted">画像 ({data.extensions.image.length}): {data.extensions.image.join(', ')}</p>
             <p className="muted">動画 ({data.extensions.video.length}): {data.extensions.video.join(', ')}</p>
+          </article>
+
+          <article className="card danger-zone">
+            <h3>読み込み記録の消去</h3>
+            <p className="muted">
+              スキャンで取り込んだファイル記録とサムネイルを DB から消します。
+              <strong>ディスク上の画像ファイルは削除されません</strong>（再スキャンで元に戻せます）。
+              ゴミ箱に入れたファイルの記録は、消すと復元できなくなるため残します。
+            </p>
+            <div className="row">
+              <button
+                className="button danger"
+                type="button"
+                disabled={clearLibrary.isPending || data.stats.total === 0}
+                onClick={() =>
+                  clearLibrary.clear('current', {
+                    total: data.stats.total,
+                    rootPath: data.root_path,
+                  })
+                }
+              >
+                {clearLibrary.isPending ? <Spinner size={14} inline /> : null}
+                現在のライブラリをクリア（{data.stats.total.toLocaleString()} 件）
+              </button>
+              <button
+                className="button ghost"
+                type="button"
+                disabled={clearLibrary.isPending}
+                onClick={() => clearLibrary.clear('all', {})}
+                title="過去に別フォルダをスキャンした記録もまとめて消します"
+              >
+                すべての読み込み記録をクリア
+              </button>
+            </div>
           </article>
         </>
       )}

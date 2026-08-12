@@ -35,3 +35,7 @@ Thumbs.db
 app/node_modules/
 app/dist/
 app/src-tauri/target/
+
+# テスト/実行時に作られるゴミ箱フォルダ
+_TrashBox/
+PhotoSortX_Trash/

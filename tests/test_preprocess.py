@@ -13,6 +13,7 @@ from src.services.preprocess_service import (
     MOVIES_DIR,
     OTHERS_DIR,
     PICTURES_DIR,
+    count_targets,
     run_preprocess,
 )
 
@@ -30,6 +31,42 @@ class TestRunPreprocess(unittest.TestCase):
         with open(full, "wb") as fp:
             fp.write(b"x")
         return full
+
+    def test_count_targets_matches_run_result(self):
+        """
+        事前カウントと実行結果が一致すること。
+
+        画面の「見つかった件数」と「対象N件中」がずれて見えていた原因は、
+        事前カウントが別基準（対応拡張子のみ・カテゴリフォルダの中も含む）
+        だったこと。両者が同じ対象定義を使うことを保証する。
+        """
+        self._touch("loose/a.jpg")
+        self._touch("loose/b.png")
+        self._touch("loose/deep/c.tiff")
+        self._touch("loose/notes.txt")   # 未対応拡張子 → Others
+        self._touch("top.mp4")
+        # 既に振り分け済みのものは対象外
+        self._touch(f"{PICTURES_DIR}/done1.jpg")
+        self._touch(f"{PICTURES_DIR}/sub/done2.jpg")
+        self._touch(f"{MOVIES_DIR}/done.mp4")
+
+        preview = count_targets(self.temp_dir)
+        result = run_preprocess(self.temp_dir)
+
+        self.assertEqual(preview["total"], result["total"])
+        self.assertEqual(preview["pictures"], result["pictures"])
+        self.assertEqual(preview["movies"], result["movies"])
+        self.assertEqual(preview["others"], result["others"])
+        self.assertEqual(preview["total"], 5)
+        self.assertEqual(preview["pictures"], 3)
+        self.assertEqual(preview["movies"], 1)
+        self.assertEqual(preview["others"], 1)
+
+    def test_count_targets_is_zero_after_sorting(self):
+        """振り分け後に再度数えると 0 になること（再実行しても対象が残らない）"""
+        self._touch("loose/a.jpg")
+        run_preprocess(self.temp_dir)
+        self.assertEqual(count_targets(self.temp_dir)["total"], 0)
 
     def test_sorts_by_category_preserving_structure(self):
         self._touch("Event1/photo.jpg")

@@ -103,7 +103,7 @@ export function PreprocessPage() {
           isEmpty={false}
           loadingMessage="ジョブ状態を確認中..."
         />
-        <FolderPicker value={rootPath} onChange={setRootPath} disabled={busy} />
+        <FolderPicker value={rootPath} onChange={setRootPath} disabled={busy} countMode="preprocess" />
         <div className="row">
           <button
             className="button"

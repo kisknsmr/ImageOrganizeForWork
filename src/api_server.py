@@ -25,7 +25,7 @@ from .config import config
 from .database import DatabaseManager
 from .services import organize_service
 from .services.duplicate_service import run_full_hash
-from .services.preprocess_service import run_preprocess
+from .services.preprocess_service import count_targets, run_preprocess
 from .services.scan_analyze_service import count_disk_files, run_analyze, run_scan
 
 
@@ -34,6 +34,12 @@ TRIAGE_ACTIONS = {"keep", "discard", "skip"}
 
 class ScanStartRequest(BaseModel):
     root_path: str = Field(..., min_length=1)
+
+
+class LibraryClearRequest(BaseModel):
+    """読み込み記録の消去。current = 現在のライブラリのみ / all = 全記録。"""
+    scope: Literal["current", "all"] = "current"
+    root_path: Optional[str] = None
 
 
 class TriageRequest(BaseModel):
@@ -327,6 +333,23 @@ def preprocess_start(payload: ScanStartRequest) -> dict:
     return jobs.snapshot()
 
 
+@app.get("/api/preprocess/check")
+def preprocess_check(root_path: str) -> dict:
+    """
+    振り分け対象の件数と内訳を事前に返す。
+
+    スキャン用の /api/scan/check とは対象範囲が異なる（あちらは対応拡張子のみ・
+    カテゴリフォルダの中も含む）。実行結果と数が食い違わないよう、
+    run_preprocess と同じ collect_targets を使う。
+    """
+    root = os.path.normpath(root_path)
+    valid = os.path.isdir(root)
+    if not valid:
+        return {"root_path": root, "valid": False, "total": 0,
+                "pictures": 0, "movies": 0, "others": 0}
+    return {"root_path": root, "valid": True, **count_targets(root)}
+
+
 @app.get("/api/scan/check")
 def scan_check(root_path: str) -> dict:
     root = os.path.normpath(root_path)
@@ -349,6 +372,31 @@ def analyze_reset(payload: ScanStartRequest) -> dict:
     root = os.path.normpath(payload.root_path)
     reset_count = db.reset_analysis_under_root(root)
     return {"reset": reset_count}
+
+
+@app.post("/api/library/clear")
+def library_clear(payload: LibraryClearRequest) -> dict:
+    """
+    前回の読み込み記録（スキャンで取り込んだファイル一覧）を消す。
+
+    ディスク上のファイルには触れない。ゴミ箱の記録は復元できなくなるため残す。
+    """
+    if jobs.snapshot()["running"]:
+        raise HTTPException(status_code=409, detail="job is already running")
+
+    if payload.scope == "all":
+        root = None
+    else:
+        root = payload.root_path or db.get_setting("root_path")
+        if not root:
+            raise HTTPException(
+                status_code=400,
+                detail="対象のライブラリが未設定です。scope=all を指定するか、先にスキャンしてください。",
+            )
+        root = os.path.normpath(root)
+
+    result = db.clear_scan_records(root)
+    return {**result, "root_path": root, "scope": payload.scope}
 
 
 @app.post("/api/analyze/start")
