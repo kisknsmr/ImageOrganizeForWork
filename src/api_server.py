@@ -554,10 +554,30 @@ def file_info(file_id: int) -> dict:
     return info
 
 
+#: EXIF Orientation タグ。5〜8 は 90/270 度回転を含むので幅と高さが入れ替わる
+_EXIF_ORIENTATION_TAG = 0x0112
+_EXIF_SWAPPED_ORIENTATIONS = {5, 6, 7, 8}
+
+
 def _image_dimensions(path: str) -> tuple[Optional[int], Optional[int]]:
+    """
+    表示されるときの寸法を返す。
+
+    サムネイルやプレビューは exif_transpose で回転を反映してから作っている。
+    ここで生の値をそのまま返すと、縦位置で撮った写真の寸法が実際の見え方と
+    縦横逆になる。EXIF の Orientation を見て入れ替える
+    （タグの読み取りだけなので画素のデコードは発生しない）。
+    """
     try:
         with Image.open(path) as img:
-            return img.width, img.height
+            width, height = img.width, img.height
+            try:
+                orientation = img.getexif().get(_EXIF_ORIENTATION_TAG)
+            except Exception:
+                orientation = None
+            if orientation in _EXIF_SWAPPED_ORIENTATIONS:
+                width, height = height, width
+            return width, height
     except Exception:
         # 画像として開けないものは寸法なしで返す（エラーにはしない）
         return None, None

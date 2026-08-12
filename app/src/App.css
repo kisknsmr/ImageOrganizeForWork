@@ -1321,10 +1321,16 @@ input[type='radio'] {
   box-shadow: var(--md-elevation-1);
 }
 
+/*
+ * 長辺をセルに合わせ、画像全体を必ず見せる（contain）。
+ * cover だと正方形セルに合わせて長辺が切り落とされ、
+ * 縦位置の写真やパノラマがサムネイルから判別できなくなる。
+ * 余白は最も暗い面で埋めて、切れているのではなく収めていると分かるようにする。
+ */
 .thumb-item img {
   width: 100%;
   aspect-ratio: 1 / 1;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: var(--md-shape-sm);
   background: var(--md-surface-container-lowest);
 }
@@ -1398,6 +1404,8 @@ input[type='radio'] {
 .thumb-list .thumb-item img {
   width: 56px;
   height: 56px;
+  /* リスト表示でも切り取らない（グリッドと判断基準を揃える） */
+  object-fit: contain;
   border-radius: var(--md-shape-sm);
 }
 
