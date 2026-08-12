@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api/client'
+import type { PreprocessMode } from '../types'
 
 // Tauri 環境かどうかを判定
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -25,6 +26,8 @@ type FolderPickerProps = {
    * ずれると「見つかった件数」と処理結果の件数が食い違って見える。
    */
   countMode?: 'scan' | 'preprocess'
+  /** countMode='preprocess' のときの走査モード。件数は実行時と同じ基準で数える */
+  preprocessMode?: PreprocessMode
 }
 
 /**
@@ -37,6 +40,7 @@ export function FolderPicker({
   disabled,
   label = 'Selected Folder',
   countMode = 'scan',
+  preprocessMode = 'incremental',
 }: FolderPickerProps) {
   const [checkedPath, setCheckedPath] = useState('')
   const enabled = checkedPath.trim().length > 0
@@ -48,8 +52,8 @@ export function FolderPicker({
     enabled: enabled && countMode === 'scan',
   })
   const preprocessCheck = useQuery({
-    queryKey: ['preprocessCheck', checkedPath],
-    queryFn: () => api.preprocessCheck(checkedPath),
+    queryKey: ['preprocessCheck', checkedPath, preprocessMode],
+    queryFn: () => api.preprocessCheck(checkedPath, preprocessMode),
     enabled: enabled && countMode === 'preprocess',
   })
   const check = countMode === 'preprocess' ? preprocessCheck : scanCheck
@@ -101,9 +105,13 @@ export function FolderPicker({
           {check.isFetching ? 'ファイル数を確認中...' : null}
           {!check.isFetching && check.data && !check.data.valid ? 'フォルダが見つかりません' : null}
           {!check.isFetching && preprocessCheck.data?.valid && countMode === 'preprocess'
-            ? `全 ${preprocessCheck.data.all_files.toLocaleString()} 件` +
+            ? `走査 ${preprocessCheck.data.all_files.toLocaleString()} 件` +
               ` ／ 振り分け対象 ${preprocessCheck.data.total.toLocaleString()} 件` +
-              `（画像 ${preprocessCheck.data.pictures.toLocaleString()} ・ ` +
+              `（未振り分け ${preprocessCheck.data.unsorted.toLocaleString()}` +
+              (preprocessCheck.data.misplaced > 0
+                ? ` ・要見直し ${preprocessCheck.data.misplaced.toLocaleString()}`
+                : '') +
+              `／画像 ${preprocessCheck.data.pictures.toLocaleString()} ・ ` +
               `動画 ${preprocessCheck.data.movies.toLocaleString()} ・ ` +
               `その他 ${preprocessCheck.data.others.toLocaleString()}）` +
               ` ／ 対応不要 ${preprocessCheck.data.already_sorted.toLocaleString()} 件`

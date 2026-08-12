@@ -36,6 +36,12 @@ class ScanStartRequest(BaseModel):
     root_path: str = Field(..., min_length=1)
 
 
+class PreprocessStartRequest(BaseModel):
+    """振り分けの開始。mode=full はカテゴリフォルダの中も見直す。"""
+    root_path: str = Field(..., min_length=1)
+    mode: Literal["incremental", "full"] = "incremental"
+
+
 class LibraryClearRequest(BaseModel):
     """読み込み記録の消去。current = 現在のライブラリのみ / all = 全記録。"""
     scope: Literal["current", "all"] = "current"
@@ -183,14 +189,17 @@ def _run_analyzer() -> None:
     run_analyze(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
 
 
-def _run_preprocessor(root_path: str) -> None:
-    result = run_preprocess(root_path, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
+def _run_preprocessor(root_path: str, full: bool) -> None:
+    result = run_preprocess(
+        root_path, status_cb=jobs.set_status, progress_cb=jobs.set_progress, full=full
+    )
     jobs.set_result(result)
     if not result.get("stopped"):
+        recheck = f"・見直し移動{result['rechecked']}件" if result.get("rechecked") else ""
         message = (
             f"完了: 全{result['all_files']}件中 移動{result['moved']}件"
             f"（Pictures {result['pictures']} / Movies {result['movies']} / Others {result['others']}）"
-            f"・対応不要{result['already_sorted']}件・スキップ{result['skipped']}件"
+            f"{recheck}・対応不要{result['already_sorted']}件・スキップ{result['skipped']}件"
         )
         jobs.set_status(message)
 
@@ -335,12 +344,12 @@ def scan_status() -> dict:
 
 
 @app.post("/api/preprocess/start")
-def preprocess_start(payload: ScanStartRequest) -> dict:
+def preprocess_start(payload: PreprocessStartRequest) -> dict:
     root_path = os.path.normpath(payload.root_path)
     if not os.path.isdir(root_path):
         raise HTTPException(status_code=400, detail="root_path is not a directory")
     try:
-        jobs.start("preprocess", _run_preprocessor, root_path)
+        jobs.start("preprocess", _run_preprocessor, root_path, payload.mode == "full")
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return jobs.snapshot()
@@ -355,7 +364,7 @@ def jobs_reset() -> dict:
 
 
 @app.get("/api/preprocess/check")
-def preprocess_check(root_path: str) -> dict:
+def preprocess_check(root_path: str, mode: Literal["incremental", "full"] = "incremental") -> dict:
     """
     振り分け対象の件数と内訳を事前に返す。
 
@@ -367,8 +376,9 @@ def preprocess_check(root_path: str) -> dict:
     valid = os.path.isdir(root)
     if not valid:
         return {"root_path": root, "valid": False, "all_files": 0, "total": 0,
-                "already_sorted": 0, "pictures": 0, "movies": 0, "others": 0}
-    return {"root_path": root, "valid": True, **summarize_folder(root)}
+                "unsorted": 0, "misplaced": 0, "already_sorted": 0,
+                "full": mode == "full", "pictures": 0, "movies": 0, "others": 0}
+    return {"root_path": root, "valid": True, **summarize_folder(root, mode == "full")}
 
 
 @app.get("/api/scan/check")

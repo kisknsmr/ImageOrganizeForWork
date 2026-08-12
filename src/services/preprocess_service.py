@@ -37,71 +37,103 @@ def _category_for(filename: str) -> str:
     return OTHERS_DIR
 
 
-def scan_folder(root: str) -> tuple[list[tuple[str, str]], int]:
+#: 振り分け対象 1 件。(絶対パス, 移動先での相対ディレクトリ, 見直しによる移動か)
+Target = tuple[str, str, bool]
+
+
+def scan_folder(root: str, full: bool = False) -> tuple[list[Target], int]:
     """
     フォルダ内のファイルを「振り分け対象」と「対応不要」に分ける。
 
     対象の定義はここ 1 箇所に集約する。実行と事前カウントで基準がずれると
     画面上の件数が食い違って見える。
 
+    Args:
+        full:
+            False（差分）… カテゴリフォルダ(01/02/03)の中は走査しない。
+                振り分け済みのファイルは触らないので速く、結果も予測しやすい。
+            True（フル）… カテゴリフォルダの中も走査し、**分類が正しいか判定する**。
+                対応拡張子が増えると分類結果は変わるため
+                （例: HEIC 対応前に 03 Others へ入ったファイルは、今の基準では画像）、
+                見直せないと誤った振り分けが永久に残る。
+
     Returns:
         (targets, already_sorted)
-        targets       … 振り分け対象。(絶対パス, root からの相対ディレクトリ)
-        already_sorted… 既にカテゴリフォルダ(01/02/03)の中にあり、動かす必要がない件数
+        targets       … 振り分け対象
+        already_sorted… 既に正しいカテゴリフォルダにあり、動かす必要がない件数
+                        （差分モードでは走査しないので 0 のまま）
 
-    全ファイル数 = len(targets) + already_sorted が常に成り立つ（ゴミ箱を除く）。
     拡張子による絞り込みは**しない**。未対応の拡張子は 03 Others 行きになる。
     """
-    targets: list[tuple[str, str]] = []
+    targets: list[Target] = []
     already_sorted = 0
 
     for current_root, dirs, files in os.walk(root):
         if config.TRASH_FOLDER_NAME in current_root:
             dirs[:] = []
             continue
-        rel_from_root = os.path.relpath(current_root, root)
-        top = rel_from_root.split(os.sep, 1)[0] if rel_from_root != "." else ""
-        # カテゴリフォルダの中は「振り分け済み」。件数を出すために中も数える
+        rel_from_root = "" if current_root == root else os.path.relpath(current_root, root)
+        parts = rel_from_root.split(os.sep) if rel_from_root else []
+        top = parts[0] if parts else ""
         in_category = top in CATEGORY_DIRS
+
+        if in_category and not full:
+            # 差分モードでは中へ降りない（走査そのものを省く）
+            dirs[:] = []
+            continue
 
         for filename in files:
             full_path = os.path.join(current_root, filename)
             if not config.validate_path(full_path):
                 continue
-            if in_category:
+
+            if not in_category:
+                targets.append((full_path, rel_from_root, False))
+                continue
+
+            # カテゴリフォルダ内。今の基準での正しい分類と一致するか見る
+            if _category_for(filename) == top:
                 already_sorted += 1
             else:
-                targets.append((full_path, "" if rel_from_root == "." else rel_from_root))
+                # 移動先ではカテゴリ名を除いた残りの階層を保つ
+                # （01 Pictures/Event1/x.mp4 → 02 Movies/Event1/x.mp4）
+                targets.append((full_path, os.sep.join(parts[1:]), True))
 
     return targets, already_sorted
 
 
-def collect_targets(root: str) -> list[tuple[str, str]]:
+def collect_targets(root: str, full: bool = False) -> list[Target]:
     """振り分け対象だけを返す（scan_folder の薄いラッパ）。"""
-    return scan_folder(root)[0]
+    return scan_folder(root, full)[0]
 
 
-def _category_counts(targets: list[tuple[str, str]]) -> dict:
+def _category_counts(targets: list[Target]) -> dict:
     counts = {PICTURES_DIR: 0, MOVIES_DIR: 0, OTHERS_DIR: 0}
-    for full_path, _rel_dir in targets:
+    for full_path, _rel_dir, _recheck in targets:
         counts[_category_for(os.path.basename(full_path))] += 1
     return counts
 
 
-def summarize_folder(root_path: str) -> dict:
+def summarize_folder(root_path: str, full: bool = False) -> dict:
     """
     実行前に、フォルダの内訳を返す（移動は行わない）。
 
-    run_preprocess と同じ scan_folder を使うので、ここで出た数は実行後の
-    結果表示と必ず一致する。
+    run_preprocess と同じ scan_folder を同じモードで使うので、ここで出た数は
+    実行後の結果表示と必ず一致する。
     """
     root = os.path.normpath(root_path)
-    targets, already_sorted = scan_folder(root)
+    targets, already_sorted = scan_folder(root, full)
     counts = _category_counts(targets)
+    misplaced = sum(1 for _p, _d, recheck in targets if recheck)
     return {
         "all_files": len(targets) + already_sorted,
         "total": len(targets),
+        # 未振り分け（カテゴリフォルダの外にある）
+        "unsorted": len(targets) - misplaced,
+        # 既に振り分け済みだが、今の基準では別カテゴリに入るべきもの
+        "misplaced": misplaced,
         "already_sorted": already_sorted,
+        "full": full,
         "pictures": counts[PICTURES_DIR],
         "movies": counts[MOVIES_DIR],
         "others": counts[OTHERS_DIR],
@@ -113,12 +145,16 @@ def run_preprocess(
     status_cb: Optional[StatusCallback] = None,
     progress_cb: Optional[ProgressCallback] = None,
     should_stop: Optional[StopCallback] = None,
+    full: bool = False,
 ) -> dict:
     """
     root_path 配下の全ファイルを 01 Pictures / 02 Movies / 03 Others へ移動する。
     サブフォルダの構成はカテゴリフォルダの下にそのまま再現する。
-    既にカテゴリフォルダの中にあるファイルはスキャン対象から除外するため、
-    再実行しても安全（二重に振り分けられない）。
+
+    既に正しいカテゴリにあるファイルは触らないので、再実行しても安全。
+    一方で、**間違ったカテゴリにあるファイルは正しい方へ移し直す**。
+    対応拡張子が増えると分類結果が変わるため（HEIC 対応前に 03 Others へ
+    入ったファイルなど）、見直しができないと誤りが永久に残る。
     """
     root = os.path.normpath(root_path)
     emit_status = status_cb or (lambda _msg: None)
@@ -126,22 +162,26 @@ def run_preprocess(
     stopper = should_stop or (lambda: False)
 
     emit_status("対象ファイルを検索中...")
-    targets, already_sorted = scan_folder(root)
+    targets, already_sorted = scan_folder(root, full)
 
     total = len(targets)
     all_files = total + already_sorted
+    misplaced = sum(1 for _p, _d, recheck in targets if recheck)
+    unsorted = total - misplaced
     counts = {PICTURES_DIR: 0, MOVIES_DIR: 0, OTHERS_DIR: 0}
     if total == 0:
         emit_status("振り分け対象のファイルがありません")
         return {
             "stopped": False, "moved": 0, "skipped": 0, "total": 0,
             "all_files": all_files, "already_sorted": already_sorted,
+            "unsorted": 0, "misplaced": 0, "rechecked": 0, "full": full,
             "pictures": 0, "movies": 0, "others": 0,
         }
 
     emit_status(f"{total}件を振り分け中...")
     moved = 0
     skipped = 0
+    rechecked = 0
     started_at = time.time()
 
     def _result(stopped: bool) -> dict:
@@ -149,10 +189,13 @@ def run_preprocess(
             "stopped": stopped, "moved": moved, "skipped": skipped, "total": total,
             # フォルダ全体の内訳も返す（全ファイル = 対象 + 対応不要）
             "all_files": all_files, "already_sorted": already_sorted,
+            "unsorted": unsorted, "misplaced": misplaced,
+            # 実際に別カテゴリへ移し直した件数
+            "rechecked": rechecked, "full": full,
             "pictures": counts[PICTURES_DIR], "movies": counts[MOVIES_DIR], "others": counts[OTHERS_DIR],
         }
 
-    for idx, (full_path, rel_dir) in enumerate(targets, 1):
+    for idx, (full_path, rel_dir, is_recheck) in enumerate(targets, 1):
         if stopper():
             return _result(stopped=True)
         filename = os.path.basename(full_path)
@@ -168,6 +211,8 @@ def run_preprocess(
                 shutil.move(full_path, dest_path)
                 moved += 1
                 counts[category] += 1
+                if is_recheck:
+                    rechecked += 1
         except OSError as e:
             logger.error(f"Failed to move {full_path} -> {dest_path}: {e}")
             skipped += 1

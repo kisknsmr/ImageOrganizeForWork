@@ -6,8 +6,15 @@ export type PreprocessResult = {
   total: number
   /** フォルダ内の全ファイル数（ゴミ箱を除く）= total + already_sorted */
   all_files: number
-  /** 既にカテゴリフォルダ内にあり、動かす必要がなかった件数 */
+  /** 既に正しいカテゴリにあり、動かす必要がなかった件数 */
   already_sorted: number
+  /** まだ振り分けられていなかった件数 */
+  unsorted: number
+  /** 別カテゴリへ移し直すべきだった件数 */
+  misplaced: number
+  /** 実際に移し直した件数 */
+  rechecked: number
+  full: boolean
   pictures: number
   movies: number
   others: number
@@ -189,16 +196,24 @@ export type LibraryClearResult = {
   scope: LibraryClearScope
 }
 
+/** 振り分けの走査モード。full はカテゴリフォルダの中も見直す */
+export type PreprocessMode = 'incremental' | 'full'
+
 /** GET /api/preprocess/check — 振り分け対象の事前カウント（実行結果の total と一致する） */
 export type PreprocessCheck = {
   root_path: string
   valid: boolean
-  /** フォルダ内の全ファイル数（ゴミ箱を除く）= total + already_sorted */
+  /** 走査したファイル数 = total + already_sorted（差分モードではカテゴリ内を数えない） */
   all_files: number
-  /** 振り分け対象 */
+  /** 振り分け対象 = unsorted + misplaced */
   total: number
-  /** 既にカテゴリフォルダ内にあり、動かす必要がない件数 */
+  /** まだ振り分けられていない（カテゴリフォルダの外にある） */
+  unsorted: number
+  /** 既に振り分け済みだが、今の基準では別カテゴリに入るべきもの */
+  misplaced: number
+  /** 既に正しいカテゴリにあり、動かす必要がない件数 */
   already_sorted: number
+  full: boolean
   pictures: number
   movies: number
   others: number

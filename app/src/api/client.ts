@@ -13,6 +13,7 @@ import type {
   OrganizePreview,
   PagedFiles,
   PreprocessCheck,
+  PreprocessMode,
   ScanCheck,
   ScanJob,
   SimilarResponse,
@@ -68,11 +69,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ scope }),
     }),
-  preprocessStart: (rootPath: string) =>
-    request<ScanJob>('/api/preprocess/start', { method: 'POST', body: JSON.stringify({ root_path: rootPath }) }),
+  preprocessStart: (rootPath: string, mode: PreprocessMode = 'incremental') =>
+    request<ScanJob>('/api/preprocess/start', {
+      method: 'POST',
+      body: JSON.stringify({ root_path: rootPath, mode }),
+    }),
   /** 振り分け対象の事前カウント。scanCheck とは対象範囲が異なる */
-  preprocessCheck: (rootPath: string) =>
-    request<PreprocessCheck>(`/api/preprocess/check?root_path=${encodeURIComponent(rootPath)}`),
+  preprocessCheck: (rootPath: string, mode: PreprocessMode = 'incremental') =>
+    request<PreprocessCheck>(
+      `/api/preprocess/check?root_path=${encodeURIComponent(rootPath)}&mode=${mode}`,
+    ),
   files: (params: URLSearchParams) => request<PagedFiles>(`/api/files?${params.toString()}`),
   /** プレビューペイン用のファイル詳細（サイズ・寸法はディスクの実値） */
   fileInfo: (id: number) => request<FileInfo>(`/api/files/${id}/info`),

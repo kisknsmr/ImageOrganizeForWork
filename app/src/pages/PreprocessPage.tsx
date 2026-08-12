@@ -6,21 +6,28 @@ import { QueryState } from '../components/QueryState'
 import { Spinner } from '../components/Spinner'
 import { useJobStatus } from '../components/useJobStatus'
 import { getApiErrorMessage, useToast } from '../components/useToast'
+import type { PreprocessMode } from '../types'
 
 export function PreprocessPage() {
   const toast = useToast()
   const [rootPath, setRootPath] = useState('')
+  const [mode, setMode] = useState<PreprocessMode>('incremental')
   const { status, jobRunning, jobKindLabel, refetchStatus } = useJobStatus()
 
   const startPreprocess = useMutation({
     mutationFn: async () => {
+      const scope =
+        mode === 'full'
+          ? '既に振り分け済みのファイルも分類を見直し、間違ったカテゴリにあるものは移し直します。\n'
+          : 'カテゴリフォルダ(01/02/03)の中は対象外です（未振り分けのみ）。\n'
       const confirmed = window.confirm(
-        `「${rootPath}」直下のファイルを画像/動画/その他に振り分けます。\n` +
+        `「${rootPath}」のファイルを画像/動画/その他に振り分けます。\n` +
           '  01 Pictures ／ 02 Movies ／ 03 Others\n' +
+          scope +
           '元のサブフォルダ構成はそれぞれの下に保たれます（ファイルの移動です）。実行しますか？',
       )
       if (!confirmed) return null
-      return api.preprocessStart(rootPath)
+      return api.preprocessStart(rootPath, mode)
     },
     onSuccess: (res) => {
       if (res) {
@@ -110,6 +117,12 @@ export function PreprocessPage() {
             </div>
           </div>
           <p className="muted">
+            {status.data.result.full ? 'フル（見直しあり）' : '差分'}で実行。
+            {status.data.result.rechecked > 0
+              ? `うち ${status.data.result.rechecked.toLocaleString()}件は分類を見直して別カテゴリへ移し直しました。`
+              : ''}
+          </p>
+          <p className="muted">
             移動の内訳: Pictures {status.data.result.pictures.toLocaleString()} ・ Movies{' '}
             {status.data.result.movies.toLocaleString()} ・ Others{' '}
             {status.data.result.others.toLocaleString()}
@@ -131,7 +144,35 @@ export function PreprocessPage() {
           isEmpty={false}
           loadingMessage="ジョブ状態を確認中..."
         />
-        <FolderPicker value={rootPath} onChange={setRootPath} disabled={busy} countMode="preprocess" />
+        <FolderPicker
+          value={rootPath}
+          onChange={setRootPath}
+          disabled={busy}
+          countMode="preprocess"
+          preprocessMode={mode}
+        />
+        <div className="row">
+          <div className="view-mode-group" role="group" aria-label="走査モード">
+            <button
+              type="button"
+              className={`view-mode-button ${mode === 'incremental' ? 'active' : ''}`}
+              aria-pressed={mode === 'incremental'}
+              onClick={() => setMode('incremental')}
+              title="カテゴリフォルダの中は見ない。未振り分けのファイルだけを対象にする"
+            >
+              差分
+            </button>
+            <button
+              type="button"
+              className={`view-mode-button ${mode === 'full' ? 'active' : ''}`}
+              aria-pressed={mode === 'full'}
+              onClick={() => setMode('full')}
+              title="振り分け済みのファイルも分類を見直し、間違ったカテゴリにあるものを移し直す"
+            >
+              フル（見直し）
+            </button>
+          </div>
+        </div>
         <div className="row">
           <button
             className="button"
@@ -145,7 +186,9 @@ export function PreprocessPage() {
           </button>
         </div>
         <p className="muted">
-          01 Pictures / 02 Movies / 03 Others 以外のフォルダの中身も対象になります（フォルダ自体は空のまま残ります）。
+          {mode === 'full'
+            ? '振り分け済みのファイルも分類を見直します。対応形式が増えた後（HEIC など）に、03 Others へ入ったままの画像を正しいカテゴリへ移せます。'
+            : '01 Pictures / 02 Movies / 03 Others の中身は対象外です。未振り分けのファイルだけを移動します（フォルダ自体は空のまま残ります）。'}
         </p>
         {status.data?.error && <p className="muted analyze-note">エラー: {status.data.error}</p>}
       </article>

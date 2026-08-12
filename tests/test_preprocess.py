@@ -50,8 +50,9 @@ class TestRunPreprocess(unittest.TestCase):
         self._touch(f"{PICTURES_DIR}/sub/done2.jpg")
         self._touch(f"{MOVIES_DIR}/done.mp4")
 
-        preview = summarize_folder(self.temp_dir)
-        result = run_preprocess(self.temp_dir)
+        # 内訳の整合はカテゴリ内も数えるフルモードで検証する
+        preview = summarize_folder(self.temp_dir, full=True)
+        result = run_preprocess(self.temp_dir, full=True)
 
         for key in ("all_files", "total", "already_sorted", "pictures", "movies", "others"):
             self.assertEqual(preview[key], result[key], f"{key} が事前カウントと結果で食い違う")
@@ -69,7 +70,7 @@ class TestRunPreprocess(unittest.TestCase):
         """振り分け後に再度数えると 0 になること（再実行しても対象が残らない）"""
         self._touch("loose/a.jpg")
         run_preprocess(self.temp_dir)
-        after = summarize_folder(self.temp_dir)
+        after = summarize_folder(self.temp_dir, full=True)
         self.assertEqual(after["total"], 0)
         # 消えたわけではなく「対応不要」に移っただけ
         self.assertEqual(after["all_files"], 1)
@@ -102,8 +103,63 @@ class TestRunPreprocess(unittest.TestCase):
             result,
             {"stopped": False, "moved": 0, "skipped": 0, "total": 0,
              "all_files": 0, "already_sorted": 0,
+             "unsorted": 0, "misplaced": 0, "rechecked": 0, "full": False,
              "pictures": 0, "movies": 0, "others": 0},
         )
+
+    def test_incremental_ignores_category_folders(self):
+        """差分モードでは振り分け済みのファイルを一切見ない"""
+        self._touch(f"{OTHERS_DIR}/legacy.heic")   # 今の基準では画像
+        self._touch("loose/new.jpg")
+
+        preview = summarize_folder(self.temp_dir, full=False)
+        self.assertEqual(preview["total"], 1)
+        self.assertEqual(preview["unsorted"], 1)
+        self.assertEqual(preview["misplaced"], 0)
+        # カテゴリフォルダの中は走査しないので母数にも入らない
+        self.assertEqual(preview["all_files"], 1)
+
+        result = run_preprocess(self.temp_dir, full=False)
+        self.assertEqual(result["moved"], 1)
+        self.assertEqual(result["rechecked"], 0)
+        # 03 Others のままで動かされていない
+        self.assertTrue(os.path.exists(os.path.join(self.temp_dir, OTHERS_DIR, "legacy.heic")))
+
+    def test_full_moves_misclassified_file(self):
+        """
+        フルモードは分類を見直す。
+
+        対応拡張子が増える前に 03 Others へ落ちた画像を、
+        今の基準で 01 Pictures へ移し直せること。
+        """
+        self._touch(f"{OTHERS_DIR}/Event1/legacy.heic")
+        self._touch(f"{PICTURES_DIR}/ok.jpg")
+
+        preview = summarize_folder(self.temp_dir, full=True)
+        self.assertEqual(preview["all_files"], 2)
+        self.assertEqual(preview["misplaced"], 1)
+        self.assertEqual(preview["unsorted"], 0)
+        self.assertEqual(preview["already_sorted"], 1)
+
+        result = run_preprocess(self.temp_dir, full=True)
+        self.assertEqual(result["rechecked"], 1)
+        self.assertEqual(result["moved"], 1)
+        # カテゴリ名を除いた階層が移動先で保たれる
+        self.assertTrue(
+            os.path.exists(os.path.join(self.temp_dir, PICTURES_DIR, "Event1", "legacy.heic")))
+        self.assertFalse(
+            os.path.exists(os.path.join(self.temp_dir, OTHERS_DIR, "Event1", "legacy.heic")))
+        # 正しい場所にあったファイルは触らない
+        self.assertTrue(os.path.exists(os.path.join(self.temp_dir, PICTURES_DIR, "ok.jpg")))
+
+    def test_full_is_idempotent(self):
+        """フルモードを繰り返しても、2 回目は移動対象が無いこと"""
+        self._touch(f"{OTHERS_DIR}/legacy.heic")
+        run_preprocess(self.temp_dir, full=True)
+        second = summarize_folder(self.temp_dir, full=True)
+        self.assertEqual(second["total"], 0)
+        self.assertEqual(second["misplaced"], 0)
+        self.assertEqual(second["already_sorted"], 1)
 
     def test_rerun_is_idempotent(self):
         self._touch("a.jpg")
