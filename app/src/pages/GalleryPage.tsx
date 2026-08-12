@@ -2,17 +2,21 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
+import { PaneResizer } from '../components/PaneResizer'
 import { PreviewPane } from '../components/PreviewPane'
+import { ResizableLayout } from '../components/ResizableLayout'
 import { QueryState } from '../components/QueryState'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
 import type { FileItem } from '../types'
 
 export function GalleryPage() {
   const toast = useToast()
   const view = useViewMode('gallery')
+  const pane = useResizablePane('gallery')
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<FileItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -109,7 +113,7 @@ export function GalleryPage() {
           </button>
         </div>
       </div>
-      <div className={`gallery-layout ${showFolderPanel ? 'with-folder' : ''}`}>
+      <ResizableLayout className={`gallery-layout ${showFolderPanel ? 'with-folder' : ''}`} pane={pane}>
         <div>
           <QueryState
             isLoading={files.isPending}
@@ -149,6 +153,12 @@ export function GalleryPage() {
             </div>
           )}
         </div>
+        <PaneResizer
+          onPointerDown={pane.onPointerDown}
+          onKeyDown={pane.onKeyDown}
+          onReset={pane.reset}
+          isResizing={pane.isResizing}
+        />
         {/* プレビューは常に出す。フォルダパネルは置き換えではなく列を足す
             （置き換えると、ドラッグ元の画像を確認しながら移動できない） */}
         <PreviewPane item={selected} />
@@ -164,7 +174,7 @@ export function GalleryPage() {
             hint="サムネをここのフォルダへドラッグすると一括移動できます。"
           />
         )}
-      </div>
+      </ResizableLayout>
     </section>
   )
 }

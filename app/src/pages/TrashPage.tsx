@@ -1,17 +1,24 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api/client'
+import { PaneResizer } from '../components/PaneResizer'
+import { PreviewPane } from '../components/PreviewPane'
 import { QueryState } from '../components/QueryState'
+import { ResizableLayout } from '../components/ResizableLayout'
 import { Spinner } from '../components/Spinner'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
+import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
+import type { FileItem } from '../types'
 
 const PAGE_SIZE = 80
 
 export function TrashPage() {
   const toast = useToast()
   const view = useViewMode('trash')
+  const pane = useResizablePane('trash')
+  const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [destinationFolder, setDestinationFolder] = useState('')
   const [page, setPage] = useState(1)
@@ -243,26 +250,39 @@ export function TrashPage() {
           </button>
         </div>
       </article>
-      <div
-        className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
-        style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
-      >
-        {!trash.isPending &&
-          !trash.isError &&
-          items.map((item) => (
-            <label key={item.id} className="thumb-item checkbox-card">
-              <input
-                type="checkbox"
-                checked={selectedIds.includes(item.id)}
-                onChange={() => toggle(item.id)}
-                disabled={busy}
-              />
-              <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
-              <span>{item.filename}</span>
-              <p className="thumb-meta">{item.content_type ?? item.extension}</p>
-            </label>
-          ))}
-      </div>
+      <ResizableLayout className="gallery-layout" pane={pane}>
+        <div
+          className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
+          style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
+        >
+          {!trash.isPending &&
+            !trash.isError &&
+            items.map((item) => (
+              <label
+                key={item.id}
+                className="thumb-item checkbox-card"
+                onClick={() => setPreviewItem(item)}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(item.id)}
+                  onChange={() => toggle(item.id)}
+                  disabled={busy}
+                />
+                <img src={api.thumbnailUrl(item.id)} alt={item.filename} loading="lazy" />
+                <span>{item.filename}</span>
+                <p className="thumb-meta">{item.content_type ?? item.extension}</p>
+              </label>
+            ))}
+        </div>
+        <PaneResizer
+          onPointerDown={pane.onPointerDown}
+          onKeyDown={pane.onKeyDown}
+          onReset={pane.reset}
+          isResizing={pane.isResizing}
+        />
+        <PreviewPane item={previewItem} emptyMessage="サムネイルをクリックすると、ここに拡大表示と情報が出ます。" />
+      </ResizableLayout>
     </section>
   )
 }

@@ -442,16 +442,73 @@
 
 /* --- 2 ペインレイアウト（一覧 + 右サイドパネル）---------------------- */
 
+/*
+ * 一覧 + サイドペインのレイアウト。
+ *
+ * サイドペイン幅の既定はビューポート幅に追従する clamp。ユーザーがハンドルを
+ * ドラッグすると --side-pane-width が px で入り、そちらが優先される
+ * （自動で合わせる／自分で決める、の両立）。
+ * リサイズハンドル自身は幅 0 の列として挟む（gap の中に浮かせる）。
+ */
 .gallery-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  grid-template-columns:
+    minmax(0, 1fr)
+    0
+    var(--side-pane-width, clamp(280px, 26vw, 460px));
   align-items: start;
   gap: var(--sp-4);
 }
 
-/* フォルダパネルはプレビューを置き換えず、3 列目として足す */
+/* フォルダパネルはプレビューを置き換えず、4 列目として足す */
 .gallery-layout.with-folder {
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px) minmax(240px, 300px);
+  grid-template-columns:
+    minmax(0, 1fr)
+    0
+    var(--side-pane-width, clamp(260px, 20vw, 380px))
+    clamp(240px, 18vw, 320px);
+}
+
+/* --- ペインのリサイズハンドル ---------------------------------------- */
+
+.pane-resizer {
+  position: relative;
+  width: 0;
+  align-self: stretch;
+  min-height: 80px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* 見た目は細いが、掴む領域は左右に広げる（細い線は掴みにくい） */
+.pane-resizer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--sp-4) / -2 - 4px);
+  width: calc(var(--sp-4) + 8px);
+}
+
+.pane-resizer-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--sp-4) / -2 - 1px);
+  width: 2px;
+  border-radius: var(--md-shape-full);
+  background: transparent;
+  transition: background-color var(--md-duration-short) var(--md-ease-standard);
+}
+
+.pane-resizer:hover .pane-resizer-grip,
+.pane-resizer:focus-visible .pane-resizer-grip,
+.pane-resizer.resizing .pane-resizer-grip {
+  background: var(--md-primary);
+}
+
+.pane-resizer:focus-visible {
+  outline: none;
 }
 
 /*
@@ -531,7 +588,16 @@
   line-height: 18px;
 }
 
-.preview-pane img,
+/* プレビューは可能な範囲で大きく。高さは画面に追従させる */
+.preview-pane img {
+  width: 100%;
+  min-height: clamp(180px, 26vh, 380px);
+  max-height: clamp(240px, 46vh, 720px);
+  object-fit: contain;
+  border-radius: var(--md-shape-md);
+  background: var(--md-surface-container-lowest);
+}
+
 .triage-image {
   width: 100%;
   max-height: 60vh;
@@ -547,13 +613,22 @@
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  grid-template-columns:
+    clamp(220px, 17vw, 320px)
+    minmax(0, 1fr)
+    0
+    var(--side-pane-width, clamp(280px, 22vw, 420px));
   align-items: start;
   gap: var(--sp-4);
 }
 
 .workspace.with-folder {
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(260px, 320px);
+  grid-template-columns:
+    clamp(200px, 14vw, 280px)
+    minmax(0, 1fr)
+    0
+    var(--side-pane-width, clamp(260px, 18vw, 360px))
+    clamp(220px, 15vw, 300px);
 }
 
 .pane {
@@ -1757,11 +1832,16 @@ progress:not([value]) {
     gap: var(--sp-1);
   }
 
+  /* 縦積みになるとリサイズの意味がないので、ハンドルごと畳む */
   .gallery-layout,
   .gallery-layout.with-folder,
   .workspace,
   .workspace.with-folder {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pane-resizer {
+    display: none;
   }
 
   .preview-pane,

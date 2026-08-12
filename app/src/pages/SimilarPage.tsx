@@ -2,17 +2,24 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
+import { PaneResizer } from '../components/PaneResizer'
+import { PreviewPane } from '../components/PreviewPane'
 import { QueryState } from '../components/QueryState'
+import { ResizableLayout } from '../components/ResizableLayout'
 import { Spinner } from '../components/Spinner'
 import { TruncationNotice } from '../components/TruncationNotice'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
+import type { FileItem } from '../types'
 
 export function SimilarPage() {
   const toast = useToast()
   const view = useViewMode('similar')
+  const pane = useResizablePane('similar')
+  const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   // null = 未編集。既定値はサーバー設定に追従させる
   const [distanceInput, setDistanceInput] = useState<number | null>(null)
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
@@ -185,7 +192,7 @@ export function SimilarPage() {
         hint="全件を対象にするには先に不要ファイルを整理してください。"
       />
       {!similar.isPending && !similar.isError && (
-        <div className={`workspace ${showFolderPanel ? 'with-folder' : ''}`}>
+        <ResizableLayout className={`workspace ${showFolderPanel ? 'with-folder' : ''}`} pane={pane}>
           {/* 左: グループ選択 */}
           <aside className="pane" aria-label="類似グループ一覧">
             <div className="pane-header">
@@ -242,6 +249,7 @@ export function SimilarPage() {
                       <label
                         key={item.id}
                         className={`thumb-item checkbox-card ${isBest ? 'best' : ''}`}
+                        onClick={() => setPreviewItem(item)}
                         draggable
                         onDragStart={onDragStart(item.id)}
                       >
@@ -262,7 +270,13 @@ export function SimilarPage() {
             </div>
           </section>
 
-          {/* 右: 画像を隠さず並置する */}
+          <PaneResizer
+            onPointerDown={pane.onPointerDown}
+            onKeyDown={pane.onKeyDown}
+            onReset={pane.reset}
+            isResizing={pane.isResizing}
+          />
+          <PreviewPane item={previewItem} emptyMessage="サムネイルをクリックすると、ここに拡大表示と情報が出ます。" />
           {showFolderPanel && (
             <FolderDropPanel
               folders={folders.data?.folders ?? []}
@@ -272,7 +286,7 @@ export function SimilarPage() {
               disabled={busy}
             />
           )}
-        </div>
+        </ResizableLayout>
       )}
     </section>
   )

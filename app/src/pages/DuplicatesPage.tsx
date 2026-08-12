@@ -2,18 +2,25 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
+import { PaneResizer } from '../components/PaneResizer'
+import { PreviewPane } from '../components/PreviewPane'
 import { QueryState } from '../components/QueryState'
+import { ResizableLayout } from '../components/ResizableLayout'
 import { Spinner } from '../components/Spinner'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useJobStatus } from '../components/useJobStatus'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
+import type { FileItem } from '../types'
 import { formatFileSize } from '../utils/format'
 
 export function DuplicatesPage() {
   const toast = useToast()
   const view = useViewMode('duplicates')
+  const pane = useResizablePane('duplicates')
+  const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   const { status: jobStatus } = useJobStatus()
   const [useFullHash, setUseFullHash] = useState(false)
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
@@ -200,7 +207,7 @@ export function DuplicatesPage() {
         emptyMessage="重複グループは見つかりませんでした。"
       />
       {!duplicates.isPending && !duplicates.isError && (
-        <div className={`workspace ${showFolderPanel ? 'with-folder' : ''}`}>
+        <ResizableLayout className={`workspace ${showFolderPanel ? 'with-folder' : ''}`} pane={pane}>
           {/* 左: グループ選択（一覧するだけなので行リストで十分） */}
           <aside className="pane" aria-label="重複グループ一覧">
             <div className="pane-header">
@@ -251,6 +258,7 @@ export function DuplicatesPage() {
                     <label
                       key={item.id}
                       className="thumb-item checkbox-card"
+                      onClick={() => setPreviewItem(item)}
                       draggable
                       onDragStart={onDragStart(item.id)}
                     >
@@ -269,7 +277,13 @@ export function DuplicatesPage() {
             </div>
           </section>
 
-          {/* 右: 任意表示。画像を隠さず並置するのでドラッグ＆ドロップが成立する */}
+          <PaneResizer
+            onPointerDown={pane.onPointerDown}
+            onKeyDown={pane.onKeyDown}
+            onReset={pane.reset}
+            isResizing={pane.isResizing}
+          />
+          <PreviewPane item={previewItem} emptyMessage="サムネイルをクリックすると、ここに拡大表示と情報が出ます。" />
           {showFolderPanel && (
             <FolderDropPanel
               folders={folders.data?.folders ?? []}
@@ -279,7 +293,7 @@ export function DuplicatesPage() {
               disabled={busy}
             />
           )}
-        </div>
+        </ResizableLayout>
       )}
     </section>
   )

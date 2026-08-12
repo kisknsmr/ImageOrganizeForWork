@@ -2,18 +2,25 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
+import { PaneResizer } from '../components/PaneResizer'
+import { PreviewPane } from '../components/PreviewPane'
 import { QueryState } from '../components/QueryState'
+import { ResizableLayout } from '../components/ResizableLayout'
 import { Spinner } from '../components/Spinner'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
+import type { FileItem } from '../types'
 
 const PAGE_SIZE = 60
 
 export function ManualSortPage() {
   const toast = useToast()
   const view = useViewMode('manual-sort')
+  const pane = useResizablePane('manual-sort')
+  const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [destinationFolder, setDestinationFolder] = useState('')
   const [page, setPage] = useState(1)
@@ -192,7 +199,7 @@ export function ManualSortPage() {
           </button>
         </div>
       </article>
-      <div className="gallery-layout with-folder">
+      <ResizableLayout className="gallery-layout with-folder" pane={pane}>
         <div
           className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
           style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
@@ -203,6 +210,7 @@ export function ManualSortPage() {
               <label
                 key={item.id}
                 className="thumb-item checkbox-card"
+                onClick={() => setPreviewItem(item)}
                 draggable
                 onDragStart={onDragStart(item.id)}
               >
@@ -218,6 +226,13 @@ export function ManualSortPage() {
               </label>
             ))}
         </div>
+        <PaneResizer
+          onPointerDown={pane.onPointerDown}
+          onKeyDown={pane.onKeyDown}
+          onReset={pane.reset}
+          isResizing={pane.isResizing}
+        />
+        <PreviewPane item={previewItem} emptyMessage="サムネイルをクリックすると、ここに拡大表示と情報が出ます。" />
         <FolderDropPanel
           folders={folders.data?.folders ?? []}
           libraryRoot={folders.data?.root_path}
@@ -226,7 +241,7 @@ export function ManualSortPage() {
           onFolderCreated={handleFolderCreated}
           disabled={busy}
         />
-      </div>
+      </ResizableLayout>
     </section>
   )
 }

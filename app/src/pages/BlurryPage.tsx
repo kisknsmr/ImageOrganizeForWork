@@ -2,19 +2,26 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api/client'
 import { FolderDropPanel } from '../components/FolderDropPanel'
+import { PaneResizer } from '../components/PaneResizer'
+import { PreviewPane } from '../components/PreviewPane'
 import { QueryState } from '../components/QueryState'
+import { ResizableLayout } from '../components/ResizableLayout'
 import { Spinner } from '../components/Spinner'
 import { TruncationNotice } from '../components/TruncationNotice'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
+import type { FileItem } from '../types'
 
 const PAGE_SIZE = 60
 
 export function BlurryPage() {
   const toast = useToast()
   const view = useViewMode('blurry')
+  const pane = useResizablePane('blurry')
+  const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   // null = 未編集。既定値はサーバー設定に追従させる
   const [thresholdInput, setThresholdInput] = useState<number | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -199,7 +206,7 @@ export function BlurryPage() {
         loadingMessage="ぼけ候補を読み込み中..."
         emptyMessage="ぼけ候補は見つかりませんでした。"
       />
-      <div className={`gallery-layout ${showFolderPanel ? 'with-folder' : ''}`}>
+      <ResizableLayout className={`gallery-layout ${showFolderPanel ? 'with-folder' : ''}`} pane={pane}>
         <div
           className={view.mode === 'grid' ? 'thumb-grid' : 'thumb-list'}
           style={view.mode === 'grid' ? ({ ['--thumb-size' as string]: `${view.size}px` } as React.CSSProperties) : undefined}
@@ -210,6 +217,7 @@ export function BlurryPage() {
               <label
                 key={item.id}
                 className="thumb-item checkbox-card"
+                onClick={() => setPreviewItem(item)}
                 draggable
                 onDragStart={onDragStart(item.id)}
               >
@@ -225,6 +233,13 @@ export function BlurryPage() {
               </label>
             ))}
         </div>
+        <PaneResizer
+          onPointerDown={pane.onPointerDown}
+          onKeyDown={pane.onKeyDown}
+          onReset={pane.reset}
+          isResizing={pane.isResizing}
+        />
+        <PreviewPane item={previewItem} emptyMessage="サムネイルをクリックすると、ここに拡大表示と情報が出ます。" />
         {showFolderPanel ? (
           <FolderDropPanel
             folders={folders.data?.folders ?? []}
@@ -234,7 +249,7 @@ export function BlurryPage() {
             disabled={busy}
           />
         ) : null}
-      </div>
+      </ResizableLayout>
     </section>
   )
 }
