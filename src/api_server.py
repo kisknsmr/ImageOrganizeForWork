@@ -465,29 +465,47 @@ def file_detail(file_id: int) -> dict:
     return row
 
 
-#: Web UI のサムネイル生成サイズ。UI 側のサイズスライダ上限(280px)で
-#: 破綻しない解像度にする（PyQt 版が保存する 120px より大きい）。
-WEB_THUMBNAIL_SIZE = 320
-
 #: サムネイルは内容から決まるので、ある程度キャッシュさせて再取得を減らす。
 _THUMB_CACHE_HEADERS = {"Cache-Control": "private, max-age=3600"}
+
+
+def _is_too_small(blob: bytes) -> bool:
+    """
+    保存済みサムネイルが Web UI の表示サイズに足りないか。
+
+    PyQt 版や以前の解析は 120px で保存していたため、サイズスライダを上げると
+    そういった画像だけ甘く見える。判定は JPEG ヘッダのみの読み取りで、
+    画素のデコードは発生しない。
+    """
+    try:
+        with Image.open(io.BytesIO(blob)) as img:
+            return max(img.size) < config.WEB_THUMBNAIL_SIZE * 0.9
+    except Exception:
+        return False
 
 
 @app.get("/api/files/{file_id}/thumbnail")
 def file_thumbnail(file_id: int) -> Response:
     """
-    サムネイルを返す。無ければその場で生成して保存する。
+    サムネイルを返す。無い場合と、小さすぎる場合はその場で作り直して保存する。
 
     サムネイルは解析(Analyze)時にしか作られないため、未解析のライブラリでは
     一覧が壊れ画像で埋まっていた。初回だけ生成コストを払い、以降は DB から返す。
     """
     blob = db.get_thumbnail(file_id)
-    if not blob:
+    if not blob or _is_too_small(blob):
         row = db.get_file_by_id(file_id)
         if not row:
             raise HTTPException(status_code=404, detail="file not found")
-        blob = _image_preview_bytes(row["path"], WEB_THUMBNAIL_SIZE)
-        db.save_thumbnail(file_id, blob)
+        try:
+            regenerated = _image_preview_bytes(row["path"], config.WEB_THUMBNAIL_SIZE)
+        except HTTPException:
+            # 元ファイルが消えている等。既存の小さいサムネイルがあるなら使う
+            if not blob:
+                raise
+        else:
+            blob = regenerated
+            db.save_thumbnail(file_id, blob)
     return Response(content=blob, media_type="image/jpeg", headers=_THUMB_CACHE_HEADERS)
 
 

@@ -24,7 +24,10 @@ class AppConfig:
     BATCH_SIZE_DELETE: int = 900
 
     # サムネイル設定
-    DEFAULT_THUMBNAIL_SIZE: int = 120
+    DEFAULT_THUMBNAIL_SIZE: int = 120  # PyQt 版のギャラリー用
+    # Web UI(Tauri) 用。サイズスライダの上限(280px)で破綻しない解像度にする。
+    # ここを 120 にすると、拡大表示したときに解析済みの画像だけ甘く見える。
+    WEB_THUMBNAIL_SIZE: int = 320
     THUMBNAIL_QUALITY: int = 70
 
     # 画像処理設定

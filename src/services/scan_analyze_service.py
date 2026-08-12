@@ -174,11 +174,11 @@ def run_analyze(
                 if ext in config.IMAGE_EXTENSIONS:
                     blur = _calc_blur(path)
                     phash = _calc_phash(path)
-                    thumb = _build_thumbnail_bytes(path, config.DEFAULT_THUMBNAIL_SIZE)
+                    thumb = _build_thumbnail_bytes(path, config.WEB_THUMBNAIL_SIZE)
                     if thumb:
                         db.save_thumbnail(fid, thumb)
                 elif ext in config.VIDEO_EXTENSIONS:
-                    thumb = _build_video_thumbnail_bytes(path, config.DEFAULT_THUMBNAIL_SIZE)
+                    thumb = _build_video_thumbnail_bytes(path, config.WEB_THUMBNAIL_SIZE)
                     if thumb:
                         db.save_thumbnail(fid, thumb)
                 db.update_analysis_result(fid, md5_hash, phash or None, blur)
