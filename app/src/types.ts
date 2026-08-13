@@ -23,6 +23,8 @@ export type PreprocessResult = {
 export type ScanJob = {
   kind: string
   running: boolean
+  /** 実行中だがユーザー操作で待機している */
+  paused?: boolean
   current: number
   total: number
   percent: number

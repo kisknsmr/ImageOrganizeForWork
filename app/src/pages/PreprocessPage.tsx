@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api/client'
 import { FolderPicker } from '../components/FolderPicker'
+import { JobControls } from '../components/JobControls'
 import { QueryState } from '../components/QueryState'
 import { Spinner } from '../components/Spinner'
 import { useJobStatus } from '../components/useJobStatus'
@@ -64,7 +65,7 @@ export function PreprocessPage() {
           <div className="toolbar-group">
             <span className="status-chip">
               <span className="status-dot" />
-              {jobKindLabel}
+              {status.data?.paused ? '一時停止中' : jobKindLabel}
             </span>
             <span className="muted">{status.data?.message}</span>
             <span className="muted">{status.data?.percent ?? 0}%</span>
@@ -74,6 +75,7 @@ export function PreprocessPage() {
               </span>
             )}
           </div>
+          <JobControls paused={status.data?.paused ?? false} onChanged={refetchStatus} />
           {(status.data?.percent ?? 0) === 0 ? (
             <progress max={100} />
           ) : (

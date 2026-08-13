@@ -19,7 +19,10 @@ class AppConfig:
     MD5_READ_SIZE: int = 8192  # MD5計算時の読み込みサイズ
 
     # バッチ処理サイズ
-    BATCH_SIZE_ANALYZER: int = 20
+    BATCH_SIZE_ANALYZER: int = 64
+    # 解析のデコード並列数。画像デコードは GIL を解放するのでスレッドで効く。
+    # 増やしすぎるとディスク I/O が飽和して逆に遅くなるため上限を設ける。
+    ANALYZE_WORKERS: int = max(2, min(8, (os.cpu_count() or 4)))
     BATCH_SIZE_CLUSTERING: int = 32
     BATCH_SIZE_DELETE: int = 900
 

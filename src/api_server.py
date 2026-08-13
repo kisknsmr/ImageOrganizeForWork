@@ -96,6 +96,8 @@ class OrganizeApplyRequest(BaseModel):
 class JobState:
     kind: str = "idle"
     running: bool = False
+    #: 実行中だがユーザー操作で待機している状態
+    paused: bool = False
     current: int = 0
     total: int = 0
     percent: int = 0
@@ -110,6 +112,10 @@ class JobManager:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._state = JobState()
+        # set() = 動作中 / clear() = 一時停止中。ワーカーはこれを待つ
+        self._resume = threading.Event()
+        self._resume.set()
+        self._cancelled = False
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -120,23 +126,70 @@ class JobManager:
             if self._state.running:
                 raise RuntimeError(f"{self._state.kind} is already running")
             self._state = JobState(kind=kind, running=True, message="開始中...", started_at=time.time())
+            self._cancelled = False
+            self._resume.set()
 
         thread = threading.Thread(target=self._run, args=(target, args), daemon=True)
         thread.start()
+
+    # --- 一時停止・中止 ------------------------------------------------
+    def pause(self) -> bool:
+        with self._lock:
+            if not self._state.running or self._state.paused:
+                return False
+            self._state.paused = True
+            self._resume.clear()
+            self._state.message = "一時停止中"
+            return True
+
+    def resume(self) -> bool:
+        with self._lock:
+            if not self._state.running or not self._state.paused:
+                return False
+            self._state.paused = False
+            self._state.message = "再開しました"
+            self._resume.set()
+            return True
+
+    def cancel(self) -> bool:
+        with self._lock:
+            if not self._state.running:
+                return False
+            self._cancelled = True
+            self._state.paused = False
+            self._state.message = "停止中..."
+        # 一時停止中に中止された場合、待っているワーカーを起こす
+        self._resume.set()
+        return True
+
+    def should_stop(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def wait_if_paused(self) -> None:
+        """一時停止中はここで待つ。中止されると待機は解除される。"""
+        self._resume.wait()
 
     def _run(self, target, args) -> None:
         try:
             target(*args)
             with self._lock:
                 self._state.running = False
-                self._state.percent = 100
+                self._state.paused = False
+                # 中止された場合は進捗を 100% に書き換えない（途中で終わっている）
+                if not self._cancelled:
+                    self._state.percent = 100
                 self._state.finished_at = time.time()
         except Exception as exc:
             with self._lock:
                 self._state.running = False
+                self._state.paused = False
                 self._state.error = str(exc)
                 self._state.message = f"エラー: {exc}"
                 self._state.finished_at = time.time()
+        finally:
+            # 次のジョブが一時停止状態から始まらないようにする
+            self._resume.set()
 
     def set_status(self, message: str) -> None:
         with self._lock:
@@ -186,7 +239,14 @@ def _run_scanner(root_path: str) -> None:
 
 
 def _run_analyzer() -> None:
-    run_analyze(db, status_cb=jobs.set_status, progress_cb=jobs.set_progress)
+    result = run_analyze(
+        db,
+        status_cb=jobs.set_status,
+        progress_cb=jobs.set_progress,
+        should_stop=jobs.should_stop,
+        wait_if_paused=jobs.wait_if_paused,
+    )
+    jobs.set_result(result)
 
 
 def _run_preprocessor(root_path: str, full: bool) -> None:
@@ -352,6 +412,29 @@ def preprocess_start(payload: PreprocessStartRequest) -> dict:
         jobs.start("preprocess", _run_preprocessor, root_path, payload.mode == "full")
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return jobs.snapshot()
+
+
+@app.post("/api/jobs/pause")
+def jobs_pause() -> dict:
+    """実行中のジョブを一時停止する。停止はバッチ境界で効く。"""
+    if not jobs.pause():
+        raise HTTPException(status_code=409, detail="no running job to pause")
+    return jobs.snapshot()
+
+
+@app.post("/api/jobs/resume")
+def jobs_resume() -> dict:
+    if not jobs.resume():
+        raise HTTPException(status_code=409, detail="job is not paused")
+    return jobs.snapshot()
+
+
+@app.post("/api/jobs/cancel")
+def jobs_cancel() -> dict:
+    """実行中のジョブを中止する。処理済みの分は DB に残る。"""
+    if not jobs.cancel():
+        raise HTTPException(status_code=409, detail="no running job to cancel")
     return jobs.snapshot()
 
 

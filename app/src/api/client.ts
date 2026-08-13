@@ -58,6 +58,11 @@ export const api = {
   scanStatus: () => request<ScanJob>('/api/scan/status'),
   /** 直前のジョブ結果の表示を消す（実行中は 409） */
   jobsReset: () => request<ScanJob>('/api/jobs/reset', { method: 'POST' }),
+  /** 実行中のジョブを一時停止（バッチ境界で効く） */
+  jobsPause: () => request<ScanJob>('/api/jobs/pause', { method: 'POST' }),
+  jobsResume: () => request<ScanJob>('/api/jobs/resume', { method: 'POST' }),
+  /** 実行中のジョブを中止。処理済みの分は DB に残る */
+  jobsCancel: () => request<ScanJob>('/api/jobs/cancel', { method: 'POST' }),
   scanCheck: (rootPath: string) =>
     request<ScanCheck>(`/api/scan/check?root_path=${encodeURIComponent(rootPath)}`),
   analyzeStart: () => request<{ started: boolean; message?: string; job: ScanJob }>('/api/analyze/start', { method: 'POST' }),

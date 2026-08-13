@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '../api/client'
 import { FolderPicker } from './FolderPicker'
+import { JobControls } from './JobControls'
 import { QueryState } from './QueryState'
 import { Spinner } from './Spinner'
 import { useJobStatus } from './useJobStatus'
@@ -65,7 +66,7 @@ export function ImportPanel() {
           <div className="toolbar-group">
             <span className="status-chip">
               <span className="status-dot" />
-              {jobKindLabel}
+              {status.data?.paused ? '一時停止中' : jobKindLabel}
             </span>
             <span className="muted">{status.data?.message}</span>
             <span className="muted">{status.data?.percent ?? 0}%</span>
@@ -75,6 +76,7 @@ export function ImportPanel() {
               </span>
             )}
           </div>
+          <JobControls paused={status.data?.paused ?? false} onChanged={refetchStatus} />
           {(status.data?.percent ?? 0) === 0 ? (
             // 探索フェーズは総数不明のため不確定バー（value 省略でアニメーション）
             <progress max={100} />
