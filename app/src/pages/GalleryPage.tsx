@@ -10,6 +10,7 @@ import { QueryState } from '../components/QueryState'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { useFitPageSize } from '../hooks/useFitPageSize'
 import { usePageSize } from '../hooks/usePageSize'
 import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
@@ -19,7 +20,8 @@ export function GalleryPage() {
   const toast = useToast()
   const view = useViewMode('gallery')
   const pane = useResizablePane('gallery')
-  const { pageSize, setPageSize } = usePageSize('gallery', 80)
+  const fitPageSize = useFitPageSize(view.mode, view.size, pane.width ?? 320)
+  const { pageSize, setting: pageSizeSetting, setPageSize } = usePageSize('gallery', fitPageSize)
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<FileItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -73,7 +75,7 @@ export function GalleryPage() {
   const items = files.data?.items ?? []
 
   return (
-    <section className="page">
+    <section className="page wide">
       <header className="page-header">
         <h2>Gallery</h2>
         <p className="page-subtitle">サムネイルを一覧し、右ペインでプレビューとファイル情報を確認します。Ctrl+クリックで複数選択し、フォルダへドラッグできます。</p>
@@ -97,7 +99,8 @@ export function GalleryPage() {
             onSizeChange={view.setSize}
           />
           <PageSizeSelect
-            value={pageSize}
+            value={pageSizeSetting}
+            resolved={fitPageSize}
             onChange={(size) => {
               setPageSize(size)
               setPage(1)

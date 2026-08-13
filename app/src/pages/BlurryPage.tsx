@@ -12,6 +12,7 @@ import { TruncationNotice } from '../components/TruncationNotice'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { useFitPageSize } from '../hooks/useFitPageSize'
 import { usePageSize } from '../hooks/usePageSize'
 import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
@@ -21,7 +22,8 @@ export function BlurryPage() {
   const toast = useToast()
   const view = useViewMode('blurry')
   const pane = useResizablePane('blurry')
-  const { pageSize, setPageSize } = usePageSize('blurry', 60)
+  const fitPageSize = useFitPageSize(view.mode, view.size, pane.width ?? 320)
+  const { pageSize, setting: pageSizeSetting, setPageSize } = usePageSize('blurry', fitPageSize)
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   // null = 未編集。既定値はサーバー設定に追従させる
   const [thresholdInput, setThresholdInput] = useState<number | null>(null)
@@ -107,7 +109,7 @@ export function BlurryPage() {
   const busy = trashMutation.isPending || moveMutation.isPending
 
   return (
-    <section className="page">
+    <section className="page wide">
       <header className="page-header">
         <h2>Blurry Photos</h2>
         <p className="page-subtitle">ぼけスコアが低い画像候補を確認し、まとめてゴミ箱や任意のフォルダへ移動できます。</p>
@@ -133,7 +135,8 @@ export function BlurryPage() {
               onSizeChange={view.setSize}
             />
             <PageSizeSelect
-              value={pageSize}
+              value={pageSizeSetting}
+              resolved={fitPageSize}
               onChange={(size) => {
                 setPageSize(size)
                 setPage(1)

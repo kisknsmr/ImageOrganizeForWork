@@ -220,17 +220,27 @@
   scroll-padding-top: 96px;
 }
 
+/*
+ * 既定は読みやすさ優先で幅を制限する（フォーム・設定・説明文が主のページ）。
+ * 一覧が主役のページは .page.wide で制限を外す。画像グリッドに文書向けの
+ * 行長制限を掛けると、広い画面ほど余白だけが増えて表示枚数が変わらない。
+ */
 .page {
   --page-pad: var(--sp-6);
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
   width: 100%;
-  max-width: 1440px;
+  max-width: 1280px;
   margin: 0 auto;
   /* 上パディングはヘッダー側に持たせる。ここに余白があると、吸着した
      ツールバーとの隙間から本文が覗いてしまう */
   padding: 0 var(--page-pad) var(--sp-8);
+}
+
+/* 一覧が主役のページは画面幅をすべて使う */
+.page.wide {
+  max-width: none;
 }
 
 /* M3 large top app bar 相当。本文と一緒にスクロールして退避する */

@@ -108,7 +108,7 @@ export function SimilarPage() {
   const busy = trashMutation.isPending || moveMutation.isPending
 
   return (
-    <section className="page">
+    <section className="page wide">
       <header className="page-header">
         <h2>Similar Groups</h2>
         <p className="page-subtitle">

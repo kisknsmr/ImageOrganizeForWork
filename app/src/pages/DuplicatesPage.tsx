@@ -132,7 +132,7 @@ export function DuplicatesPage() {
   const busy = trashMutation.isPending || moveMutation.isPending
 
   return (
-    <section className="page">
+    <section className="page wide">
       <header className="page-header">
         <h2>Duplicates</h2>
         <p className="page-subtitle">同一ハッシュの画像グループを確認し、不要ファイルを一括でゴミ箱や任意のフォルダへ移動します。</p>

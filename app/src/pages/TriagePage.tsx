@@ -152,7 +152,7 @@ export function TriagePage() {
   const busy = triageMutation.isPending || moveMutation.isPending
 
   return (
-    <section className="page">
+    <section className="page wide">
       <header className="page-header">
         <h2>Triage</h2>
         <p className="page-subtitle">キーボード中心で高速に Keep / Discard / Skip を判定します。画像をドラッグしてフォルダへ直接移動もできます。</p>

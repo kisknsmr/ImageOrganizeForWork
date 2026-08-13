@@ -11,6 +11,7 @@ import { Spinner } from '../components/Spinner'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
 import { useDraggableFiles } from '../hooks/useDraggableFiles'
+import { useFitPageSize } from '../hooks/useFitPageSize'
 import { usePageSize } from '../hooks/usePageSize'
 import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
@@ -20,7 +21,8 @@ export function ManualSortPage() {
   const toast = useToast()
   const view = useViewMode('manual-sort')
   const pane = useResizablePane('manual-sort')
-  const { pageSize, setPageSize } = usePageSize('manual-sort', 60)
+  const fitPageSize = useFitPageSize(view.mode, view.size, pane.width ?? 320)
+  const { pageSize, setting: pageSizeSetting, setPageSize } = usePageSize('manual-sort', fitPageSize)
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [destinationFolder, setDestinationFolder] = useState('')
@@ -112,7 +114,7 @@ export function ManualSortPage() {
   const rangeEnd = (page - 1) * pageSize + items.length
 
   return (
-    <section className="page">
+    <section className="page wide">
       <header className="page-header">
         <h2>Manual Sort</h2>
         <p className="page-subtitle">選択した画像を任意フォルダへ移動、またはゴミ箱へまとめて送れます。サムネをドラッグでフォルダへ直接移動できます。</p>
@@ -138,7 +140,8 @@ export function ManualSortPage() {
               onSizeChange={view.setSize}
             />
             <PageSizeSelect
-              value={pageSize}
+              value={pageSizeSetting}
+              resolved={fitPageSize}
               onChange={(size) => {
                 setPageSize(size)
                 setPage(1)

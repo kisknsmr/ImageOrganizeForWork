@@ -9,6 +9,7 @@ import { ResizableLayout } from '../components/ResizableLayout'
 import { Spinner } from '../components/Spinner'
 import { ViewControls } from '../components/ViewControls'
 import { getApiErrorMessage, useToast } from '../components/useToast'
+import { useFitPageSize } from '../hooks/useFitPageSize'
 import { usePageSize } from '../hooks/usePageSize'
 import { useResizablePane } from '../hooks/useResizablePane'
 import { useViewMode } from '../hooks/useViewMode'
@@ -18,7 +19,8 @@ export function TrashPage() {
   const toast = useToast()
   const view = useViewMode('trash')
   const pane = useResizablePane('trash')
-  const { pageSize, setPageSize } = usePageSize('trash', 60)
+  const fitPageSize = useFitPageSize(view.mode, view.size, pane.width ?? 320)
+  const { pageSize, setting: pageSizeSetting, setPageSize } = usePageSize('trash', fitPageSize)
   const [previewItem, setPreviewItem] = useState<FileItem | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [destinationFolder, setDestinationFolder] = useState('')
@@ -157,7 +159,7 @@ export function TrashPage() {
     restoreMutation.isPending || removeFromDbMutation.isPending || permanentDeleteMutation.isPending
 
   return (
-    <section className="page">
+    <section className="page wide">
       <header className="page-header">
         <h2>Trash</h2>
         <p className="page-subtitle">ゴミ箱項目の復元、DB削除、完全削除をまとめて実行できます。</p>
@@ -183,7 +185,8 @@ export function TrashPage() {
               onSizeChange={view.setSize}
             />
             <PageSizeSelect
-              value={pageSize}
+              value={pageSizeSetting}
+              resolved={fitPageSize}
               onChange={(size) => {
                 setPageSize(size)
                 setPage(1)

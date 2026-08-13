@@ -61,7 +61,7 @@ export function TinyFilesPage() {
   const busy = trashMutation.isPending
 
   return (
-    <section className="page">
+    <section className="page wide">
       <header className="page-header">
         <h2>Tiny Files</h2>
         <p className="page-subtitle">指定サイズ未満の低容量ファイルを抽出し、まとめてゴミ箱へ移動できます。</p>
