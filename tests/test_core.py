@@ -1,9 +1,5 @@
 """
 コア機能のユニットテスト
-
-軽量関数（format_eta 等）は src.utils から直接インポートし、
-cv2 / PyQt 等の重い依存なしでテスト可能にしている。
-cv2 / PyQt を必要とするテストは HAS_CORE フラグでスキップする。
 """
 import unittest
 import os
@@ -14,24 +10,9 @@ import sys
 # テスト用のパスを追加
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# --- 軽量ユーティリティ（cv2 不要） ---
 from src.utils import format_eta, hamming_dist, format_file_size, format_file_size_kb
 from src.config import config
 from src.database import DatabaseManager
-
-# --- 重い依存（cv2 / PyQt）が必要なモジュール ---
-HAS_CORE = False
-try:
-    from src.core import (
-        setup_logging,
-        get_capture_time,
-        get_file_info,
-        ScannerThread,
-        AnalyzerThread,
-    )
-    HAS_CORE = True
-except ImportError:
-    pass
 
 
 class TestUtilFunctions(unittest.TestCase):
@@ -64,55 +45,6 @@ class TestUtilFunctions(unittest.TestCase):
         self.assertEqual(format_file_size_kb(1024), "1 KB")
         self.assertEqual(format_file_size_kb(1536), "1 KB")
         self.assertEqual(format_file_size_kb(-1), "不明")
-
-
-@unittest.skipUnless(HAS_CORE, "cv2 / PyQt が必要（環境によってはスキップ）")
-class TestCoreFunctions(unittest.TestCase):
-    """cv2 / PyQt を使うコア関数のテスト"""
-
-    def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
-        self.test_db_path = os.path.join(self.temp_dir, "test_photos.db")
-        self.db = DatabaseManager(self.test_db_path)
-        setup_logging()
-
-    def tearDown(self):
-        if self.db:
-            self.db.close()
-        if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
-
-    def test_get_capture_time(self):
-        """キャプチャ時間取得のテスト"""
-        test_file = os.path.join(self.temp_dir, "test.jpg")
-        with open(test_file, 'w') as f:
-            f.write("test")
-
-        timestamp = get_capture_time(test_file)
-        self.assertGreater(timestamp, 0)
-
-        timestamp = get_capture_time(os.path.join(self.temp_dir, "nonexistent.jpg"))
-        self.assertEqual(timestamp, 0.0)
-
-    def test_get_file_info(self):
-        """ファイル情報取得のテスト"""
-        test_file = os.path.join(self.temp_dir, "test.txt")
-        with open(test_file, 'w') as f:
-            f.write("test content")
-
-        info = get_file_info(test_file)
-        self.assertTrue(info['exists'])
-        self.assertGreater(info['file_size'], 0)
-
-        info = get_file_info(os.path.join(self.temp_dir, "nonexistent.txt"))
-        self.assertFalse(info['exists'])
-        self.assertEqual(info['file_size'], 0)
-
-    def test_get_file_info_invalid_path(self):
-        """無効なパスのテスト"""
-        invalid_path = "../../../etc/passwd"
-        info = get_file_info(invalid_path)
-        self.assertFalse(info['exists'])
 
 
 class TestDatabaseManager(unittest.TestCase):

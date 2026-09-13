@@ -1,7 +1,7 @@
 """
 Qt 非依存のスマート整理（イベントグルーピング）サービス。
 
-既存の EventGrouper（modules/event_grouper.py、Qt 非依存）の時間ベースグルーピングを再利用し、
+既存の EventGrouper（src/event_grouper.py、Qt 非依存）の時間ベースグルーピングを再利用し、
 FastAPI から呼び出せるプレビュー / 適用 API を提供する。
 
 CLIP を使った内容ベース・ハイブリッドのグルーピングは AIWorker（QThread）に依存しているため
@@ -16,7 +16,7 @@ import os
 import re
 from typing import Callable, Optional
 
-from modules.event_grouper import EventGrouper
+from src.event_grouper import EventGrouper
 from src.database import DatabaseManager
 
 logger = logging.getLogger(__name__)

@@ -1,18 +1,16 @@
-# PhotoSortX（v2.3）
+# PhotoSortX（v3.0）
 
-AI を併用できる画像整理・管理用デスクトップアプリ（PyQt6）です。フォルダ同期、解析、重複・ピンボケ・類似の整理、手動仕分け、スマート整理（CLIP）などをまとめて扱えます。
+AI を併用できる画像整理・管理用デスクトップアプリです。Tauri + React 製の UI と、
+既存資産を再利用した FastAPI バックエンド（`src/`）で構成されます。フォルダ同期、解析、
+重複・ピンボケ・類似の整理、手動仕分け、スマート整理（イベントグルーピング）などをまとめて扱えます。
 
 ## 主な機能
 
 | 区分 | 内容 |
 |------|------|
-| メイン | フォルダ同期（Scan）、詳細解析（Analyze）、ギャラリー |
-| クリーンアップ | 重複（MD5）、ピンボケ（Laplacian）、類似（pHash + VP-Tree）、極小ファイル削除 |
-| 整理 | 手動仕分け、スマート整理（イベントグルーピング + CLIP）、削除済み一覧 |
-
-## デザイン
-
-`src/theme.py` でトークン管理する **ダーク UI**（例: 背景 `#242424`、サイドバー `#1a1a1a`、アクセント青）です。リポジトリ同梱の可変フォント（`fonts/` の Inter / Noto Sans JP / Roboto）を読み込み、利用可能なら UI フォントに使います。
+| メイン | フォルダ同期（Scan）、詳細解析（Analyze）、ギャラリー、取込前処理 |
+| クリーンアップ | 重複（MD5）、ピンボケ（Laplacian）、類似（pHash + VP-Tree）、極小ファイル削除、空フォルダ削除 |
+| 整理 | 手動仕分け、スマート整理（イベントグルーピング）、トリアージ、削除済み一覧 |
 
 ## 対応フォーマット
 
@@ -41,63 +39,35 @@ AI を併用できる画像整理・管理用デスクトップアプリ（PyQt6
 ## 要件
 
 - **Python 3.10 以上**（`pyproject.toml` の `requires-python` に準拠）
-- Windows を主対象にしていますが、PyQt6 が動く環境であれば他 OS も想定できます
-- AI（スマート整理）利用時は **GPU なしでも可**ですが、メモリ・ディスクに余裕があると安全です（初回はモデル取得でネットワークが必要な場合があります）
+- Windows を主対象にしています
+- Rust ツールチェイン（`rustup`）と Node.js（デスクトップアプリのビルド・起動に必要）
+- AI（スマート整理の内容ベース分類）は現状 API サーバー側では未対応です（後述）
 
 ## セットアップ
 
 ```bash
 git clone <repository-url>
 cd ImageOrganizeForWork
+
+# 1. Python 側（リポジトリ直下）
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# Linux / macOS
-source .venv/bin/activate
+.venv\Scripts\pip install -r requirements.txt
 
-pip install -r requirements.txt
+# 2. フロントエンド
+cd app
+npm install
 ```
 
-### AI（任意）
+### AI（任意・将来対応）
 
-`requirements.txt` には含めていません（コアのみ軽量化）。スマート整理を使う場合は例えば次で追加します。
-
-```bash
-pip install "torch>=2.2" "transformers>=4.37"
-```
-
-または開発用にリポジトリから一括:
-
-```bash
-pip install -e ".[ai]"
-```
-
-詳細は [AI_SETUP_GUIDE.md](AI_SETUP_GUIDE.md) を参照してください。
-
-### パッケージとして入れる場合
-
-```bash
-pip install -e .
-```
-
-コンソールエントリ `photosortx` が有効になります（依存関係は別途 `pip install -r requirements.txt` などで入れてください）。フォントはリポジトリの `fonts/` を参照するため、**配布 zip 利用時は `fonts` をアプリと同じ階層に含める**か、開発と同様にリポジトリ全体を配置してください。
-
-## 起動
-
-```bash
-python main.py
-```
-
-インストール済みの場合:
-
-```bash
-photosortx
-```
+`requirements.txt` には含めていません（コアのみ軽量化）。`torch` / `transformers` を
+使う機能（CLIP ベースの内容分類）は現状 API サーバー経由では呼び出せません
+（[AI_SETUP_GUIDE.md](AI_SETUP_GUIDE.md) 参照、`src/services/organize_service.py` の
+`capabilities()` で `content` / `hybrid` は常に `False` を返します）。
 
 ## デスクトップアプリ（Tauri + React 版）
 
-`app/` にある新しい UI です。PyQt 版と同じ SQLite（`photos.db`）を、FastAPI
-（`src/api_server.py`）経由で共有します。
+`app/` にある UI です。FastAPI（`src/api_server.py`）経由で SQLite（`photos.db`）を扱います。
 
 ### 構成
 
@@ -108,20 +78,6 @@ PhotoSortX.exe (Tauri)
 ```
 
 `:8765` で既にサーバーが応答している場合は**二重起動せず、それを使います**。
-
-### 初回セットアップ
-
-```bash
-# 1. Python 側（リポジトリ直下）
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-
-# 2. フロントエンド
-cd app
-npm install
-```
-
-Rust ツールチェイン（`rustup`）と Node.js が必要です。
 
 ### 日常の起動
 
@@ -182,26 +138,20 @@ taskkill /PID <PID> /F
 
 ```
 ImageOrganizeForWork/
-├── main.py                 # エントリ（起動・メインウィンドウ）
 ├── pyproject.toml          # メタデータ・任意依存 ai・ビルド設定
 ├── requirements.txt        # コア依存のみ
-├── MANIFEST.in             # sdist 用（フォント等）
-├── fonts/                  # UI 用フォント（任意）
+├── app/                     # Tauri + React 製デスクトップアプリ
+│   ├── src-tauri/           # Rust シェル（Python バックエンドの起動・停止）
+│   └── src/                 # React UI（pages / components / hooks）
 ├── src/
+│   ├── api_server.py        # FastAPI バックエンド
 │   ├── config.py
-│   ├── core.py             # スキャン・解析・画像 I/O
 │   ├── database.py
-│   ├── theme.py
-│   └── utils.py
-├── gui/
-│   ├── gallery_page.py
-│   ├── icons.py
-│   ├── models.py
-│   ├── splash.py
-│   ├── thumbnail_preview.py
-│   └── workers.py          # 遅延ロード（起動を速くする）
-├── modules/                # 各機能ページ UI
-└── tests/                  # unittest（python tests/run_tests.py）
+│   ├── event_grouper.py     # イベントベースのグルーピング（Qt 非依存）
+│   ├── image_formats.py
+│   ├── utils.py
+│   └── services/             # スキャン・解析・重複・整理などのサービス層
+└── tests/                   # unittest（python tests/run_tests.py）
 ```
 
 ## テスト
@@ -216,8 +166,7 @@ python tests/run_tests.py
 
 | 現象 | 確認 |
 |------|------|
-| AI が動かない | `torch` / `transformers` の導入、初回モデル取得、オフライン時は `HF_OFFLINE_MODE` など `src/config.py` |
-| メモリ不足 | バッチ系定数の縮小、AI 未使用なら AI パッケージを外す |
+| スマート整理で内容ベース分類が選べない | 現状 API サーバー経由では未対応（[AI_SETUP_GUIDE.md](AI_SETUP_GUIDE.md) 参照）。時間ベースのグルーピングのみ利用可能 |
 | 遅い | `LOW_LOAD_MODE`、DB の整理、不要データの削減 |
 
 ## ライセンス・履歴
@@ -227,4 +176,4 @@ python tests/run_tests.py
 
 ## 謝辞
 
-PyQt6、OpenCV、Pillow、scikit-learn、CLIP / Hugging Face エコシステムを利用しています。
+Tauri、React、FastAPI、OpenCV、Pillow、scikit-learn エコシステムを利用しています。

@@ -12,26 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# path_under_root のみインポート（core は cv2 等に依存するため、テストではロジックを再実装して検証）
-try:
-    from src.core import path_under_root
-    HAS_CORE = True
-except ImportError:
-    HAS_CORE = False
-
-# core を import できない環境用: path_under_root と同じロジックを再実装
-def _path_under_root_impl(path: str, root: str) -> bool:
-    root_norm = os.path.normpath(root)
-    root_prefix = os.path.normcase(root_norm + os.sep)
-    root_norm_c = os.path.normcase(root_norm)
-    p = os.path.normcase(os.path.normpath(path))
-    return p == root_norm_c or p.startswith(root_prefix)
-
-
-def path_under_root_to_test(path: str, root: str) -> bool:
-    if HAS_CORE:
-        return path_under_root(path, root)
-    return _path_under_root_impl(path, root)
+from src.utils import path_under_root as path_under_root_to_test
 
 
 class TestPathUnderRoot(unittest.TestCase):

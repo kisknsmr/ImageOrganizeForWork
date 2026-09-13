@@ -7,6 +7,12 @@
 - スマート整理（Smart organize）を新 UI に移植: 撮影時刻ベースのイベントグルーピング → グループ名編集 → フォルダ一括整理（`/api/organize/*`）
 - `pyproject.toml` にエクストラ依存を追加（`api`: fastapi/uvicorn、`dev`: httpx）
 - organize サービス・API の自動テストを追加（計 108 テスト）
+- 前処理画面に空フォルダ一括削除を追加（連なった空フォルダは階層に関係なくまとめて削除）
+- **旧 PyQt6 版（`main.py` / `gui/` / `modules/`）を撤去。** 新 UI に移行済み。
+  `modules/event_grouper.py`（Qt 非依存）は `src/event_grouper.py` へ移設して存続。
+  `modules/ai_classifier.py`（CLIP、QThread 依存）は API サーバーから未使用のため削除 ——
+  内容ベースのスマート整理は今後 Qt 非依存の形で再実装が必要
+  （`src/services/organize_service.py` の `capabilities()` が常に `content: False` を返すのはこのため）
 
 ## v2.3
 

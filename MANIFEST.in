@@ -1,2 +1,1 @@
 include README.md LICENSE pyproject.toml requirements.txt
-recursive-include fonts *.ttf *.otf
