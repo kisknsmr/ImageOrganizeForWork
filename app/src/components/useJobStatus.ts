@@ -7,6 +7,7 @@ const KIND_LABELS: Record<string, string> = {
   scan: 'スキャン',
   analyze: '解析',
   preprocess: '振り分け',
+  empty_dirs: '空フォルダ削除',
   full_hash: '完全ハッシュ計算',
 }
 
@@ -43,7 +44,13 @@ export function useJobStatus() {
 
   const jobRunning = status.data?.running ?? false
   const jobKindLabel =
-    status.data?.kind === 'analyze' ? '解析中' : status.data?.kind === 'preprocess' ? '仕分け中' : 'スキャン中'
+    status.data?.kind === 'analyze'
+      ? '解析中'
+      : status.data?.kind === 'preprocess'
+        ? '仕分け中'
+        : status.data?.kind === 'empty_dirs'
+          ? '空フォルダ削除中'
+          : 'スキャン中'
 
   return { status, jobRunning, jobKindLabel, refetchStatus: status.refetch }
 }

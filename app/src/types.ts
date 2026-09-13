@@ -20,6 +20,32 @@ export type PreprocessResult = {
   others: number
 }
 
+/** 空フォルダ削除の結果 */
+export type EmptyDirsResult = {
+  stopped: boolean
+  /** 実際に削除できたフォルダ数 */
+  removed: number
+  /** 削除できなかったフォルダ数（判定後に中身が増えた・権限不足など） */
+  failed: number
+  /** 削除対象として見つかった数 */
+  total: number
+  /** 消したフォルダのうち、いちばん深かったものの階層 */
+  max_depth: number
+  /** 一緒に消した Thumbs.db などの残骸ファイル数 */
+  junk_removed: number
+}
+
+export type JobResult = PreprocessResult | EmptyDirsResult
+
+/** ジョブ結果はジョブ種別ごとに形が違うので、kind ではなく中身で見分ける */
+export function isPreprocessResult(result: JobResult | null | undefined): result is PreprocessResult {
+  return !!result && 'moved' in result
+}
+
+export function isEmptyDirsResult(result: JobResult | null | undefined): result is EmptyDirsResult {
+  return !!result && 'removed' in result
+}
+
 export type ScanJob = {
   kind: string
   running: boolean
@@ -32,7 +58,7 @@ export type ScanJob = {
   started_at?: number | null
   finished_at?: number | null
   error?: string | null
-  result?: PreprocessResult | null
+  result?: JobResult | null
 }
 
 export type FileItem = {
@@ -219,6 +245,18 @@ export type PreprocessCheck = {
   pictures: number
   movies: number
   others: number
+}
+
+/** GET /api/preprocess/empty-dirs — 空フォルダの事前カウント */
+export type EmptyDirsCheck = {
+  root_path: string
+  valid: boolean
+  /** 削除できる空フォルダの数（連なっている場合は 1 つずつ数える） */
+  total: number
+  /** いちばん深い対象の階層 */
+  max_depth: number
+  /** 確認用に、対象パス（root からの相対）を先頭 20 件だけ */
+  samples: string[]
 }
 
 /** GET /api/files/{id}/info — プレビューペイン用のファイル詳細 */

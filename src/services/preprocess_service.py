@@ -27,6 +27,10 @@ MOVIES_DIR = "02 Movies"
 OTHERS_DIR = "03 Others"
 CATEGORY_DIRS = (PICTURES_DIR, MOVIES_DIR, OTHERS_DIR)
 
+#: フォルダ自体を消すなら一緒に消えても困らない OS/ビューアの残骸。
+#: これしか入っていないフォルダは、エクスプローラー上は空に見えるので空として扱う。
+JUNK_FILENAMES = frozenset({"thumbs.db", "desktop.ini", ".ds_store", "picasa.ini"})
+
 
 def _category_for(filename: str) -> str:
     ext = os.path.splitext(filename)[1].lower()
@@ -138,6 +142,128 @@ def summarize_folder(root_path: str, full: bool = False) -> dict:
         "movies": counts[MOVIES_DIR],
         "others": counts[OTHERS_DIR],
     }
+
+
+def _is_protected_dir(root: str, path: str) -> bool:
+    """
+    空でも消してはいけないフォルダか。
+
+    - ゴミ箱（配下も含む）… 退避期間中のファイルの置き場所なので触らない
+    - 直下の 01/02/03 … 振り分けの受け皿。空になったからと消えると、
+      次の実行で作り直されるだけで、ユーザーからはフォルダが消えたように見える
+    """
+    parts = os.path.relpath(path, root).split(os.sep)
+    if config.TRASH_FOLDER_NAME in parts:
+        return True
+    return len(parts) == 1 and parts[0] in CATEGORY_DIRS
+
+
+def find_empty_dirs(root_path: str) -> list[str]:
+    """
+    削除できる空フォルダを、**深い方から順に**返す。
+
+    「中身がサブフォルダだけで、そのサブフォルダも全部空」という連なり
+    （a/b/c/d が全部空）も丸ごと対象になる。os.walk を bottom-up で回し、
+    子が削除対象だと分かってから親を判定するので、階層はいくつでも構わない。
+    返り値の順序どおりに削除すれば、必ず子が先に消える。
+    """
+    root = os.path.normpath(root_path)
+    removable: set[str] = set()
+    ordered: list[str] = []
+
+    for current_root, dirs, files in os.walk(root, topdown=False):
+        if current_root == root or _is_protected_dir(root, current_root):
+            continue
+        # 残るサブフォルダが 1 つでもあれば、このフォルダは空にならない
+        if any(os.path.join(current_root, name) not in removable for name in dirs):
+            continue
+        if any(name.lower() not in JUNK_FILENAMES for name in files):
+            continue
+        removable.add(current_root)
+        ordered.append(current_root)
+
+    return ordered
+
+
+def _depth_of(root: str, path: str) -> int:
+    return len(os.path.relpath(path, root).split(os.sep))
+
+
+def summarize_empty_dirs(root_path: str) -> dict:
+    """削除せずに、空フォルダの数と最大の深さだけ返す（実行前の表示用）。"""
+    root = os.path.normpath(root_path)
+    dirs = find_empty_dirs(root)
+    return {
+        "total": len(dirs),
+        "max_depth": max((_depth_of(root, path) for path in dirs), default=0),
+        # 画面で「どれが消えるのか」を確かめられるように先頭だけ添える
+        "samples": [os.path.relpath(path, root) for path in dirs[:20]],
+    }
+
+
+def remove_empty_dirs(
+    root_path: str,
+    status_cb: Optional[StatusCallback] = None,
+    progress_cb: Optional[ProgressCallback] = None,
+    should_stop: Optional[StopCallback] = None,
+) -> dict:
+    """
+    root_path 配下の空フォルダを削除する（何階層連なっていても、まとめて消える）。
+
+    ファイルが 1 つでも残っているフォルダは消さない。念のため削除は os.rmdir で行い、
+    判定と実行の間にファイルが増えていた場合は失敗させる（shutil.rmtree は使わない）。
+    root 自身・ゴミ箱・直下の 01/02/03 は残す。
+    """
+    root = os.path.normpath(root_path)
+    emit_status = status_cb or (lambda _msg: None)
+    emit_progress = progress_cb or (lambda _done, _total: None)
+    stopper = should_stop or (lambda: False)
+
+    emit_status("空フォルダを検索中...")
+    dirs = find_empty_dirs(root)
+    total = len(dirs)
+    max_depth = max((_depth_of(root, path) for path in dirs), default=0)
+    removed = 0
+    failed = 0
+    junk_removed = 0
+
+    def _result(stopped: bool) -> dict:
+        return {
+            "stopped": stopped, "removed": removed, "failed": failed,
+            "total": total, "max_depth": max_depth, "junk_removed": junk_removed,
+        }
+
+    if total == 0:
+        emit_status("空フォルダはありません")
+        return _result(stopped=False)
+
+    emit_status(f"空フォルダ{total}個を削除中...")
+    started_at = time.time()
+
+    for idx, path in enumerate(dirs, 1):
+        if stopper():
+            return _result(stopped=True)
+        try:
+            for name in os.listdir(path):
+                if name.lower() in JUNK_FILENAMES:
+                    os.remove(os.path.join(path, name))
+                    junk_removed += 1
+            os.rmdir(path)
+            removed += 1
+        except OSError as e:
+            # 子の削除に失敗した親もここに来る（空にならないので rmdir が失敗する）
+            logger.error(f"Failed to remove empty dir {path}: {e}")
+            failed += 1
+
+        if idx % 20 == 0 or idx == total:
+            elapsed = time.time() - started_at
+            remain = (total - idx) / (idx / elapsed) if idx and elapsed > 0 else 0
+            emit_status(f"空フォルダ削除中: {idx}/{total} 残り{format_eta(remain)}")
+            emit_progress(idx, total)
+
+    emit_status("完了")
+    emit_progress(total, total)
+    return _result(stopped=False)
 
 
 def run_preprocess(

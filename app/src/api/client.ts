@@ -2,6 +2,7 @@ import type {
   AppSettings,
   BlurryResponse,
   DuplicatesResponse,
+  EmptyDirsCheck,
   FileInfo,
   FileItem,
   FolderList,
@@ -84,6 +85,15 @@ export const api = {
     request<PreprocessCheck>(
       `/api/preprocess/check?root_path=${encodeURIComponent(rootPath)}&mode=${mode}`,
     ),
+  /** 空フォルダの事前カウント（削除はしない） */
+  emptyDirsCheck: (rootPath: string) =>
+    request<EmptyDirsCheck>(`/api/preprocess/empty-dirs?root_path=${encodeURIComponent(rootPath)}`),
+  /** 空フォルダを削除。連なった空フォルダは階層数に関係なくまとめて消える */
+  emptyDirsRemove: (rootPath: string) =>
+    request<ScanJob>('/api/preprocess/empty-dirs/remove', {
+      method: 'POST',
+      body: JSON.stringify({ root_path: rootPath }),
+    }),
   files: (params: URLSearchParams) => request<PagedFiles>(`/api/files?${params.toString()}`),
   /** プレビューペイン用のファイル詳細（サイズ・寸法はディスクの実値） */
   fileInfo: (id: number) => request<FileInfo>(`/api/files/${id}/info`),

@@ -13,6 +13,8 @@ from src.services.preprocess_service import (
     MOVIES_DIR,
     OTHERS_DIR,
     PICTURES_DIR,
+    remove_empty_dirs,
+    summarize_empty_dirs,
     summarize_folder,
     run_preprocess,
 )
@@ -198,6 +200,117 @@ class TestRunPreprocess(unittest.TestCase):
         self._touch("b.jpg")
         result = run_preprocess(self.temp_dir, should_stop=lambda: True)
         self.assertTrue(result["stopped"])
+
+
+class TestRemoveEmptyDirs(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _mkdir(self, rel_path: str) -> str:
+        full = os.path.join(self.temp_dir, rel_path)
+        os.makedirs(full, exist_ok=True)
+        return full
+
+    def _touch(self, rel_path: str) -> str:
+        full = os.path.join(self.temp_dir, rel_path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "wb") as fp:
+            fp.write(b"x")
+        return full
+
+    def _exists(self, rel_path: str) -> bool:
+        return os.path.exists(os.path.join(self.temp_dir, rel_path))
+
+    def test_removes_chain_of_empty_dirs_at_any_depth(self):
+        """空フォルダが何階層連なっていても、1 回でまとめて消えること"""
+        self._mkdir(os.path.join("a", "b", "c", "d", "e"))
+
+        preview = summarize_empty_dirs(self.temp_dir)
+        result = remove_empty_dirs(self.temp_dir)
+
+        self.assertEqual(preview["total"], 5)
+        self.assertEqual(preview["max_depth"], 5)
+        self.assertEqual(result["removed"], 5)
+        self.assertEqual(result["failed"], 0)
+        self.assertEqual(result["max_depth"], 5)
+        self.assertFalse(self._exists("a"))
+        # root 自身は消さない
+        self.assertTrue(os.path.isdir(self.temp_dir))
+
+    def test_keeps_dirs_that_still_hold_files(self):
+        """ファイルが残っている階層から上は残り、その下の空だけが消えること"""
+        self._touch(os.path.join("a", "keep.jpg"))
+        self._mkdir(os.path.join("a", "empty", "deeper"))
+
+        result = remove_empty_dirs(self.temp_dir)
+
+        self.assertEqual(result["removed"], 2)
+        self.assertTrue(self._exists(os.path.join("a", "keep.jpg")))
+        self.assertFalse(self._exists(os.path.join("a", "empty")))
+
+    def test_dir_with_only_junk_files_is_treated_as_empty(self):
+        """Thumbs.db しか無いフォルダは、エクスプローラー上は空なので残骸ごと消す"""
+        self._touch(os.path.join("a", "b", "Thumbs.db"))
+
+        result = remove_empty_dirs(self.temp_dir)
+
+        self.assertEqual(result["removed"], 2)
+        self.assertEqual(result["junk_removed"], 1)
+        self.assertFalse(self._exists("a"))
+
+    def test_trash_and_category_dirs_are_kept(self):
+        """ゴミ箱と直下の 01/02/03 は空でも受け皿として残すこと"""
+        from src.config import config
+
+        self._mkdir(config.TRASH_FOLDER_NAME)
+        self._mkdir(os.path.join(config.TRASH_FOLDER_NAME, "old"))
+        self._mkdir(PICTURES_DIR)
+        self._mkdir(MOVIES_DIR)
+        self._mkdir(os.path.join(OTHERS_DIR, "sub"))
+
+        result = remove_empty_dirs(self.temp_dir)
+
+        # 消えるのは 03 Others/sub だけ（カテゴリ「直下」だけが保護対象）
+        self.assertEqual(result["removed"], 1)
+        self.assertTrue(self._exists(config.TRASH_FOLDER_NAME))
+        self.assertTrue(self._exists(os.path.join(config.TRASH_FOLDER_NAME, "old")))
+        self.assertTrue(self._exists(PICTURES_DIR))
+        self.assertTrue(self._exists(MOVIES_DIR))
+        self.assertTrue(self._exists(OTHERS_DIR))
+        self.assertFalse(self._exists(os.path.join(OTHERS_DIR, "sub")))
+
+    def test_after_preprocess_source_dirs_can_be_cleaned(self):
+        """振り分けで空になった元フォルダを、続けて片付けられること"""
+        self._touch(os.path.join("Event1", "day1", "photo.jpg"))
+        run_preprocess(self.temp_dir)
+        self.assertTrue(self._exists(os.path.join("Event1", "day1")))
+
+        result = remove_empty_dirs(self.temp_dir)
+
+        self.assertEqual(result["removed"], 2)  # Event1/day1 と Event1
+        self.assertFalse(self._exists("Event1"))
+        # 移動先はファイルがあるので当然残る
+        self.assertTrue(
+            self._exists(os.path.join(PICTURES_DIR, "Event1", "day1", "photo.jpg")))
+
+    def test_no_empty_dirs_returns_zero(self):
+        self._touch("a.jpg")
+        result = remove_empty_dirs(self.temp_dir)
+        self.assertEqual(
+            result,
+            {"stopped": False, "removed": 0, "failed": 0,
+             "total": 0, "max_depth": 0, "junk_removed": 0},
+        )
+
+    def test_stop_flag_halts_early(self):
+        self._mkdir(os.path.join("a", "b"))
+        result = remove_empty_dirs(self.temp_dir, should_stop=lambda: True)
+        self.assertTrue(result["stopped"])
+        self.assertEqual(result["removed"], 0)
+        self.assertTrue(self._exists(os.path.join("a", "b")))
 
 
 if __name__ == "__main__":

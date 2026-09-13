@@ -25,7 +25,12 @@ from .config import config
 from .database import DatabaseManager
 from .services import organize_service
 from .services.duplicate_service import run_full_hash
-from .services.preprocess_service import run_preprocess, summarize_folder
+from .services.preprocess_service import (
+    remove_empty_dirs,
+    run_preprocess,
+    summarize_empty_dirs,
+    summarize_folder,
+)
 from .services.scan_analyze_service import count_disk_files, run_analyze, run_scan
 
 
@@ -40,6 +45,11 @@ class PreprocessStartRequest(BaseModel):
     """振り分けの開始。mode=full はカテゴリフォルダの中も見直す。"""
     root_path: str = Field(..., min_length=1)
     mode: Literal["incremental", "full"] = "incremental"
+
+
+class EmptyDirsRemoveRequest(BaseModel):
+    """空フォルダの削除。連なった空フォルダは階層数に関係なくまとめて消える。"""
+    root_path: str = Field(..., min_length=1)
 
 
 class LibraryClearRequest(BaseModel):
@@ -251,7 +261,11 @@ def _run_analyzer() -> None:
 
 def _run_preprocessor(root_path: str, full: bool) -> None:
     result = run_preprocess(
-        root_path, status_cb=jobs.set_status, progress_cb=jobs.set_progress, full=full
+        root_path,
+        status_cb=jobs.set_status,
+        progress_cb=jobs.set_progress,
+        should_stop=jobs.should_stop,
+        full=full,
     )
     jobs.set_result(result)
     if not result.get("stopped"):
@@ -262,6 +276,20 @@ def _run_preprocessor(root_path: str, full: bool) -> None:
             f"{recheck}・対応不要{result['already_sorted']}件・スキップ{result['skipped']}件"
         )
         jobs.set_status(message)
+
+
+def _run_empty_dir_cleaner(root_path: str) -> None:
+    result = remove_empty_dirs(
+        root_path,
+        status_cb=jobs.set_status,
+        progress_cb=jobs.set_progress,
+        should_stop=jobs.should_stop,
+    )
+    jobs.set_result(result)
+    if not result.get("stopped"):
+        failed = f"・失敗{result['failed']}個" if result.get("failed") else ""
+        depth = f"（最大{result['max_depth']}階層）" if result.get("removed") else ""
+        jobs.set_status(f"完了: 空フォルダ{result['removed']}個を削除{depth}{failed}")
 
 
 def _run_full_hash() -> None:
@@ -462,6 +490,27 @@ def preprocess_check(root_path: str, mode: Literal["incremental", "full"] = "inc
                 "unsorted": 0, "misplaced": 0, "already_sorted": 0,
                 "full": mode == "full", "pictures": 0, "movies": 0, "others": 0}
     return {"root_path": root, "valid": True, **summarize_folder(root, mode == "full")}
+
+
+@app.get("/api/preprocess/empty-dirs")
+def empty_dirs_check(root_path: str) -> dict:
+    """削除できる空フォルダの個数・最大の深さ・先頭いくつかのパスを返す（削除はしない）。"""
+    root = os.path.normpath(root_path)
+    if not os.path.isdir(root):
+        return {"root_path": root, "valid": False, "total": 0, "max_depth": 0, "samples": []}
+    return {"root_path": root, "valid": True, **summarize_empty_dirs(root)}
+
+
+@app.post("/api/preprocess/empty-dirs/remove")
+def empty_dirs_remove(payload: EmptyDirsRemoveRequest) -> dict:
+    root_path = os.path.normpath(payload.root_path)
+    if not os.path.isdir(root_path):
+        raise HTTPException(status_code=400, detail="root_path is not a directory")
+    try:
+        jobs.start("empty_dirs", _run_empty_dir_cleaner, root_path)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return jobs.snapshot()
 
 
 @app.get("/api/scan/check")
